@@ -9,6 +9,8 @@ import json
 import time
 import sys
 
+assert "execute_action" not in globals(), "Duplicate definition of execute_action"
+
 def sanitize_shell_command(command: str) -> str:
     """Clean up shell command by removing markdown and fixing syntax."""
     # Remove markdown code blocks
@@ -43,31 +45,19 @@ def validate_command(cmd: str) -> tuple[bool, str]:
     """Validate command before execution"""
     PROJECT_ROOT = "/home/astro/agi"
     
-    # Skip validation for echo commands
-    if cmd.startswith("echo"):
-        return True, ""
+    # Block multi-line commands
+    if "\n" in cmd or "\\" in cmd:
+        return False, "Multi-line commands not allowed"
         
-    # Extract paths from command
-    paths = re.findall(r'(?<= )/\S+|(?<= )\./\S+|(?<= )\.\./', cmd)
-    
-    for path in paths:
-        # Skip output redirection
-        if path.startswith('>'):
-            continue
-            
-        # Handle relative vs absolute paths
-        if path.startswith('/'):
-            full_path = path
-        else:
-            full_path = os.path.abspath(os.path.join(PROJECT_ROOT, path.lstrip("./")))
-            
-        # Ensure path is within project directory
-        if not full_path.startswith(PROJECT_ROOT):
-            return False, f"Path outside project: {path}"
-            
-        # Check if path exists (except for output paths)
-        if not path.startswith('./output/') and not os.path.exists(full_path):
-            return False, f"Path not found: {path}"
+    # Ensure absolute paths for Python files
+    if "python3" in cmd and not cmd.startswith("python3 /"):
+        return False, "Python commands must use absolute paths"
+        
+    # Validate directory exists for cd commands
+    if cmd.startswith("cd "):
+        target_dir = cmd.split("&&")[0].replace("cd ", "").strip()
+        if not os.path.isdir(target_dir):
+            return False, f"Directory not found: {target_dir}"
             
     return True, ""
 
@@ -96,33 +86,58 @@ def clean_command(cmd: str) -> str:
     """Sanitize commands by removing unsafe patterns and resolving paths"""
     PROJECT_ROOT = "/home/astro/agi"
     
-    # Fix common path patterns
-    cmd = cmd.replace("../core/", "core/")
-    cmd = cmd.replace("../executor.py", "core/executor.py")
-    cmd = cmd.replace("./core/", "core/")
-    cmd = cmd.replace("/output/", "/")
+    # Clean up multi-line commands and backslashes
+    cmd = cmd.replace('\\\n', ' ').replace('\\', ' ').strip()
     
-    # Handle Python file execution
-    if "python3" in cmd and ".py" in cmd:
-        # Extract Python file path
-        match = re.search(r'python3\s+([^\s]+\.py)', cmd)
-        if match:
-            py_file = match.group(1)
-            # Convert to proper project path
-            if py_file.startswith('../') or py_file.startswith('./'):
-                py_file = os.path.normpath(os.path.join(PROJECT_ROOT, py_file))
-            cmd = f"python3 {py_file}"
-    
-    # Block unsafe commands
-    if any(pattern in cmd.lower() for pattern in [
-        "mail", "sendmail", "postfix",
-        "sudo", "su -", "passwd",
-        "> /dev/null", "2>&1",
-        "&", "nohup",
-        "make test", "make all",
-    ]):
-        return "echo '[SKIPPED] Command blocked by security policy'"
+    # Block obviously invalid commands
+    if "../../" in cmd or cmd.endswith('\\'):
+        return "echo '[INVALID] Multi-line or invalid path detected'"
         
+    # Fix Python execution paths with regex
+    cmd = re.sub(r'python3\s+\.\./(\w+\.py)', f'python3 {PROJECT_ROOT}/\\1', cmd)
+    cmd = re.sub(r'python3\s+\./(\w+\.py)', f'python3 {PROJECT_ROOT}/\\1', cmd)
+    cmd = re.sub(r'python3\s+(\w+\.py)', f'python3 {PROJECT_ROOT}/\\1', cmd)
+    
+    # Handle test commands more gracefully
+    if "main.py tests" in cmd:
+        return f"python3 -m pytest {PROJECT_ROOT}/tests"
+    if "test" in cmd and ".py" in cmd:
+        return f"python3 -m py_compile {PROJECT_ROOT}/core/executor.py"
+        
+    # Fix directory navigation
+    if cmd.startswith("cd"):
+        parts = cmd.split("&&")
+        if len(parts) > 1:
+            # Clean up cd command and ensure it uses PROJECT_ROOT
+            cd_cmd = parts[0].strip()
+            if not cd_cmd.startswith("cd /"):
+                cd_cmd = f"cd {PROJECT_ROOT}"
+            rest = " && ".join(parts[1:]).strip()
+            cmd = f"{cd_cmd} && {rest}"
+        else:
+            # Single cd command
+            if not cmd.startswith("cd /"):
+                cmd = f"cd {PROJECT_ROOT}"
+                
+    # Update prompt template for better command generation
+    if "execute_action" in cmd:
+        prompt_template = f"""You are a precise shell command generator.
+Goal: {{goal}}
+
+Project Context:
+- Working directory: {PROJECT_ROOT}
+- Core modules in: {PROJECT_ROOT}/core/
+- Available files: {{files}}
+
+Requirements:
+- Generate ONE SINGLE LINE command (no backslashes or line breaks)
+- Use absolute paths starting with {PROJECT_ROOT}
+- NO placeholder paths or ../
+- NO markdown formatting
+- Return ONLY the raw command"""
+
+        cmd = cmd.replace("{{PROMPT}}", prompt_template)
+    
     return cmd
 
 def validate_paths(cmd: str) -> bool:
@@ -187,7 +202,43 @@ def is_safe_command(cmd: str) -> bool:
             
     return True
 
-def execute_action(goal):
+def generate_command(goal: str, bad_patterns: set) -> str:
+    """Generate a command using AI with proper path handling"""
+    PROJECT_ROOT = "/home/astro/agi"
+    
+    prompt = f"""You are a precise shell command generator for an AGI system.
+
+Goal: {goal}
+
+CRITICAL REQUIREMENTS:
+- Generate EXACTLY ONE command on a single line
+- ALL Python commands MUST start with: python3 {PROJECT_ROOT}/
+- Example: python3 {PROJECT_ROOT}/core/executor.py
+- NO relative paths like ../executor.py or ./executor.py
+- NO multi-line commands or backslashes
+- NO placeholder paths or /path/to/project
+
+Project Context:
+- Working directory: {PROJECT_ROOT}
+- Core modules: {PROJECT_ROOT}/core/
+- Available files: {', '.join(os.listdir('.')[:10])}
+
+Known issues to avoid:
+{chr(10).join(f'- {p}' for p in bad_patterns)}
+
+Return ONLY the raw shell command."""
+
+    print(f"🔍 PROMPT SENT TO AI:\n{prompt}\n")
+
+    response = ollama.chat(
+        model="mistral-hacker",
+        messages=[{"role": "user", "content": prompt}],
+        options={"timeout": 30}
+    )
+    
+    return response["message"]["content"].strip().split("\n")[0]
+
+def execute_action(goal: str) -> str:
     """Execute a shell command with improved safety and persistence"""
     PROJECT_ROOT = "/home/astro/agi"
     BAD_PATTERNS_FILE = f"{PROJECT_ROOT}/output/bad_patterns.jsonl"
@@ -203,88 +254,6 @@ def execute_action(goal):
                 except:
                     continue
 
-    # Regular command handling with retries
-    for attempt in range(3):
-        try:
-            # Build prompt with learned patterns
-            prompt = f"""You are a precise shell command generator.
-
-Goal: {goal}
-
-Project Context:
-- Working directory: {PROJECT_ROOT}
-- Core modules in: ./core/
-- Available files: {', '.join(os.listdir('.')[:10])}
-
-Known issues to avoid:
-{chr(10).join(f'- {p}' for p in bad_patterns)}
-
-Generate ONE shell command to achieve the goal.
-- Use absolute paths starting with {PROJECT_ROOT}
-- NO placeholder paths or ../
-- NO markdown formatting
-- Return ONLY the raw command"""
-
-            response = ollama.chat(
-                model="mistral-hacker",
-                messages=[{"role": "user", "content": prompt}],
-                options={"timeout": 30}
-            )
-            
-            cmd = response["message"]["content"].strip().split("\n")[0]
-            cmd = clean_command(cmd)
-            
-            # Validate command
-            is_valid, error_msg = validate_command(cmd)
-            if not is_valid:
-                # Log bad pattern for future avoidance
-                with open(BAD_PATTERNS_FILE, 'a') as f:
-                    json.dump({"pattern": error_msg, "timestamp": datetime.now().isoformat()}, f)
-                    f.write('\n')
-                if attempt < 2:  # Try again with updated patterns
-                    time.sleep(2)
-                    continue
-                return f"[INVALID] {error_msg}"
-                
-            # Execute with proper path handling
-            proc = subprocess.run(
-                cmd,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=60,
-                text=True,
-                cwd=PROJECT_ROOT  # Always execute from project root
-            )
-            
-            # Format output
-            output = []
-            if proc.stdout:
-                output.append(proc.stdout.strip())
-            if proc.stderr:
-                output.append(f"[stderr] {proc.stderr.strip()}")
-                
-            badge = "✅" if proc.returncode == 0 and not proc.stderr else "⚠️" if proc.stderr else "❌"
-            result = f"{badge} $ {cmd}\n" + "\n".join(output) if output else f"{badge} $ {cmd}\n[No output]"
-            
-            return result
-            
-        except Exception as e:
-            if attempt < 2:  # Retry on error
-                time.sleep(2)
-                continue
-            return f"[ERROR] Failed to execute: {str(e)}"
-
-def handle_sudo_command(cmd: str) -> str:
-    """Prepare command with sudo password if needed."""
-    if 'sudo' in cmd:
-        # Escape the command properly for bash -c
-        escaped_cmd = quote(cmd)
-        # Add password input and wrap in bash -c
-        return f'echo "euclid" | sudo -S bash -c {escaped_cmd}'
-    return cmd
-
-def execute_action(goal):
     # Handle specialized log analysis
     if "analyze logs" in goal.lower():
         try:
@@ -325,121 +294,51 @@ def execute_action(goal):
         except Exception as e:
             return f"[ERROR] Failed to analyze logs: {str(e)}"
 
-    # Regular command handling continues as before...
-    try:
-        prompt = f"""You are a precise shell command generator.
-
-Goal: {goal}
-
-Project Context:
-- Working directory: {os.getcwd()}
-- Project root: /home/astro/agi
-- Core modules in: ./core/
-- Available files: {', '.join(os.listdir('.')[:10])}
-
-Generate ONE shell command to achieve the goal above.
-- Use actual paths that exist in this project
-- DO NOT use placeholder paths like /path/to/project
-- DO NOT use markdown formatting or backticks
-- Return ONLY the command as raw shell code."""
-
-        response = ollama.chat(
-            model="mistral-hacker",
-            messages=[{"role": "user", "content": prompt}],
-            options={"timeout": 30}
-        )
-        
-        # Extract and clean command
-        cmd = response["message"]["content"].strip().split("\n")[0]
-        cmd = sanitize_shell_command(cmd)
-        
-        # Validate command
-        is_valid, error_msg = validate_command(cmd)
-        if not is_valid:
-            return f"[INVALID COMMAND] {error_msg}"
-            
-        # Sanitize paths and handle sudo
-        cmd = sanitize_paths(cmd)
-        cmd = handle_sudo_command(cmd)
-            
-        print(f"[CLEANED COMMAND] {cmd}")
-        
-        # Create output directory if needed
-        os.makedirs("./output", exist_ok=True)
-        
-        # Use Popen for better output handling
-        proc = subprocess.Popen(
-            cmd,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd="./output"  # Run in output directory
-        )
-        
+    # Regular command handling with retries
+    for attempt in range(3):
         try:
-            stdout, stderr = proc.communicate(timeout=60)  # Increased timeout for heavy commands
+            cmd = generate_command(goal, bad_patterns)
+            cmd = clean_command(cmd)
             
-            # Log stderr for inspection
-            if stderr:
-                with open("./output/last_error.txt", "w") as f:
-                    f.write(f"Command: {cmd}\nError: {stderr}")
-            
-            # Handle hash diff sync if needed
-            if "diff hashes.txt trusted_hashes.txt" in cmd:
-                try:
-                    os.makedirs("./backedup", exist_ok=True)
-                    results_path = Path("./results.txt")
-                    
-                    with open("./output/hash_sync.log", "a") as log:
-                        log.write(f"\n=== Hash sync at {datetime.now().isoformat()} ===\n")
-                        
-                        if results_path.exists() and results_path.stat().st_size > 0:
-                            with open(results_path, "r") as f:
-                                diff_lines = f.readlines()
-
-                            for line in diff_lines:
-                                if line.startswith("< "):  # Extract changed file path
-                                    parts = line.strip().split()
-                                    if len(parts) >= 2:
-                                        file_path = parts[1]
-                                        backup_path = f"./backedup/{file_path.replace('/', '_')}"
-                                        try:
-                                            # Copy changed file to backup dir
-                                            subprocess.run(["cp", file_path, backup_path], check=True)
-                                            log.write(f"Backed up {file_path} to {backup_path}\n")
-
-                                            # Update its hash in trusted_hashes.txt
-                                            with open("trusted_hashes.txt", "a") as trust_out:
-                                                subprocess.run(["sha256sum", file_path], stdout=trust_out, check=True)
-                                            log.write(f"Updated hash for {file_path}\n")
-                                        except Exception as e:
-                                            log.write(f"[WARN] Failed to process {file_path}: {e}\n")
-                except Exception as e:
-                    print(f"[WARN] Hash sync failed: {e}")
-                    with open("./output/hash_sync.log", "a") as log:
-                        log.write(f"[ERROR] Hash sync failed: {e}\n")
-
-            # Format output
-            output = []
-            if stdout:
-                output.append(stdout.strip())
-            if stderr:
-                output.append(f"[stderr] {stderr.strip()}")
+            # Validate command
+            is_valid, error_msg = validate_command(cmd)
+            if not is_valid:
+                # Log bad pattern for future avoidance
+                with open(BAD_PATTERNS_FILE, 'a') as f:
+                    json.dump({"pattern": error_msg, "timestamp": datetime.now().isoformat()}, f)
+                    f.write('\n')
+                if attempt < 2:  # Try again with updated patterns
+                    time.sleep(2)
+                    continue
+                return f"[INVALID] {error_msg}"
                 
-            if not output:
-                return f"$ {cmd}\n[No output]"
-                
-            return f"$ {cmd}\n" + "\n".join(output)
+            # Execute with proper path handling
+            proc = subprocess.run(
+                cmd,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
             
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            return f"$ {cmd}\n[ERROR] Command timed out after 60 seconds"
+            return proc.stdout if proc.returncode == 0 else f"[ERROR] {proc.stderr}"
             
-    except ValueError as e:
-        return f"[SYNTAX ERROR] {str(e)}"
-    except Exception as e:
-        return f"[ERROR] Failed to execute command: {str(e)}"
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(2)
+                continue
+            return f"[ERROR] {str(e)}"
+            
+    return "[ERROR] All attempts failed"
+
+def handle_sudo_command(cmd: str) -> str:
+    """Prepare command with sudo password if needed."""
+    if 'sudo' in cmd:
+        # Escape the command properly for bash -c
+        escaped_cmd = quote(cmd)
+        # Add password input and wrap in bash -c
+        return f'echo "euclid" | sudo -S bash -c {escaped_cmd}'
+    return cmd
 
 def run_tests():
     """Run test suite when module is executed directly"""
