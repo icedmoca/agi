@@ -7,6 +7,7 @@ from shlex import quote
 from datetime import datetime
 import json
 import time
+import sys
 
 def sanitize_shell_command(command: str) -> str:
     """Clean up shell command by removing markdown and fixing syntax."""
@@ -40,27 +41,32 @@ def sanitize_shell_command(command: str) -> str:
 
 def validate_command(cmd: str) -> tuple[bool, str]:
     """Validate command before execution"""
+    PROJECT_ROOT = "/home/astro/agi"
+    
     # Skip validation for echo commands
     if cmd.startswith("echo"):
         return True, ""
         
     # Extract paths from command
-    paths = re.findall(r'(?<= )/\S+|(?<= )\./\S+', cmd)
+    paths = re.findall(r'(?<= )/\S+|(?<= )\./\S+|(?<= )\.\./', cmd)
     
     for path in paths:
         # Skip output redirection
         if path.startswith('>'):
             continue
             
-        # Skip system paths
-        if path.startswith(('/bin/', '/usr/bin/')):
-            continue
+        # Handle relative vs absolute paths
+        if path.startswith('/'):
+            full_path = path
+        else:
+            full_path = os.path.abspath(os.path.join(PROJECT_ROOT, path.lstrip("./")))
             
-        # Resolve path
-        full_path = os.path.join("/home/astro/agi", path.lstrip("./"))
-        
-        # Check if path exists
-        if not os.path.exists(full_path):
+        # Ensure path is within project directory
+        if not full_path.startswith(PROJECT_ROOT):
+            return False, f"Path outside project: {path}"
+            
+        # Check if path exists (except for output paths)
+        if not path.startswith('./output/') and not os.path.exists(full_path):
             return False, f"Path not found: {path}"
             
     return True, ""
@@ -88,34 +94,35 @@ def handle_sudo_command(cmd: str) -> str:
 
 def clean_command(cmd: str) -> str:
     """Sanitize commands by removing unsafe patterns and resolving paths"""
-    # Use fixed project root
     PROJECT_ROOT = "/home/astro/agi"
     
-    # Normalize paths
+    # Fix common path patterns
+    cmd = cmd.replace("../core/", "core/")
+    cmd = cmd.replace("../executor.py", "core/executor.py")
+    cmd = cmd.replace("./core/", "core/")
     cmd = cmd.replace("/output/", "/")
-    cmd = cmd.replace("./output/", "./")
-    cmd = cmd.replace("../", "./")  # Flatten relative paths
-    cmd = cmd.replace("./backedup/", f"{PROJECT_ROOT}/backedup/")
-    cmd = cmd.replace("./core/", f"{PROJECT_ROOT}/core/")
     
-    # Fix common path mistakes
-    cmd = cmd.replace("python3 /home/astro/agi/", "python3 ")
-    cmd = cmd.replace("python3 ./", "python3 ")
+    # Handle Python file execution
+    if "python3" in cmd and ".py" in cmd:
+        # Extract Python file path
+        match = re.search(r'python3\s+([^\s]+\.py)', cmd)
+        if match:
+            py_file = match.group(1)
+            # Convert to proper project path
+            if py_file.startswith('../') or py_file.startswith('./'):
+                py_file = os.path.normpath(os.path.join(PROJECT_ROOT, py_file))
+            cmd = f"python3 {py_file}"
     
-    # Block unsafe/nonexistent commands
+    # Block unsafe commands
     if any(pattern in cmd.lower() for pattern in [
-        "mail", "sendmail", "postfix",  # Mail commands
-        "sudo", "su -", "passwd",       # Privilege escalation
-        "> /dev/null", "2>&1",         # Output redirection
-        "&", "nohup",                   # Background execution
-        "make test", "make all",        # No Makefile
-        "fail", "error",                # Invalid commands
+        "mail", "sendmail", "postfix",
+        "sudo", "su -", "passwd",
+        "> /dev/null", "2>&1",
+        "&", "nohup",
+        "make test", "make all",
     ]):
         return "echo '[SKIPPED] Command blocked by security policy'"
         
-    # Fix path references
-    cmd = cmd.replace("./", f"{PROJECT_ROOT}/")
-    
     return cmd
 
 def validate_paths(cmd: str) -> bool:
@@ -432,4 +439,25 @@ Generate ONE shell command to achieve the goal above.
     except ValueError as e:
         return f"[SYNTAX ERROR] {str(e)}"
     except Exception as e:
-        return f"[ERROR] Failed to execute command: {str(e)}" 
+        return f"[ERROR] Failed to execute command: {str(e)}"
+
+def run_tests():
+    """Run test suite when module is executed directly"""
+    print("Running executor tests...")
+    test_cases = [
+        ("cd /home/astro/agi && python3 core/executor.py", True),
+        ("python3 ../executor.py tests", False),
+        ("cd core && python3 executor.py", True),
+        ("python3 /home/astro/agi/core/executor.py", True),
+    ]
+    
+    for cmd, expected in test_cases:
+        cleaned = clean_command(cmd)
+        is_valid, _ = validate_command(cleaned)
+        print(f"\nTest: {cmd}")
+        print(f"Cleaned: {cleaned}")
+        print(f"Valid: {is_valid} (Expected: {expected})")
+        
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "test":
+        run_tests() 
