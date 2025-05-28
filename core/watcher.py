@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 import logging
 import sys
+import traceback
 WATCH_DIR = os.path.abspath(os.getcwd())  # Use absolute path
 CHECK_INTERVAL = 3  # seconds
 HASH_FILE = "trusted_hashes.txt"
@@ -25,8 +26,9 @@ def get_file_hash(path):
     try:
         with open(path, "rb") as f:
             return hashlib.sha256(f.read()).hexdigest()
-    except Exception:
-        return None
+    except Exception as e:
+        LOGGER.error("Failed to generate file hash:", exc_info=True)
+        raise e
 def load_hashes():
     hashes = {}
     if os.path.exists(HASH_FILE):
@@ -60,8 +62,8 @@ def backup_file(path: Path) -> str:
         cleanup_old_backups(path.name)
         return str(backup_path)
     except Exception as e:
-        LOGGER.error(f" Backup failed for {path}: {e}")
-        return None
+        LOGGER.error("Backup failed for {}: {}".format(path, e))
+        raise e
 def cleanup_old_backups(filename: str):
     """Keep only recent backups for a file"""
     try:
@@ -73,7 +75,8 @@ def cleanup_old_backups(filename: str):
             backups[0].unlink()
             backups.pop(0)
     except Exception as e:
-        LOGGER.error(f" Backup cleanup failed: {e}")
+        LOGGER.error("Backup cleanup failed: {}".format(e))
+        raise e
 def scan_and_detect_change():
     """Scan for file changes with improved error handling"""
     try:
@@ -85,7 +88,7 @@ def scan_and_detect_change():
         # Ensure hash file exists
         if not os.path.exists(HASH_FILE):
             with open(HASH_FILE, "w") as f:
-                f.write("# Initial hash file created at {datetime.now().isoformat()}\n")
+                f.write("# Initial hash file created at {}\n".format(datetime.now().isoformat()))
         for root, _, files in os.walk(WATCH_DIR):
             root_path = Path(root)
             if should_ignore(root_path):
@@ -122,5 +125,5 @@ def scan_and_detect_change():
             LOGGER.removeHandler(handler)
         return changes
     except Exception as e:
-        LOGGER.error(f" Scan and detect change failed: {e}")
-        return []
+        LOGGER.error("Scan and detect change failed:", exc_info=True)
+        raise e
