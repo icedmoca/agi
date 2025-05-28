@@ -1,15 +1,15 @@
 python
-import time
-import hashlib
 import os
-import shutil
+import hashlib
+import time
 from datetime import datetime
-from pathlib import Path
 import logging
 import sys
 import traceback
-WATCH_DIR = os.path.abspath(os.getcwd())  # Use absolute path
-CHECK_INTERVAL = 3  # seconds
+from pathlib import Path
+from functools import lru_cache
+WATCH_DIR = os.path.abspath(os.getcwd())
+CHECK_INTERVAL = 3
 HASH_FILE = "trusted_hashes.txt"
 IGNORE_PATTERNS = [
     "venv", "__pycache__", ".git",
@@ -18,17 +18,17 @@ IGNORE_PATTERNS = [
 ]
 LOG_FILE = os.path.join(WATCH_DIR, "file_changes.log")
 BACKUP_DIR = os.path.join(WATCH_DIR, "backedup")
-BACKUP_RETENTION = 5  # Number of backups to keep per file
+BACKUP_RETENTION = 5
 OUTPUT_DIR = os.path.join(WATCH_DIR, "output")
 LOGGING_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
-LOGGER = logging.getLogger(__name__)
 def get_file_hash(path):
     try:
         with open(path, "rb") as f:
             return hashlib.sha256(f.read()).hexdigest()
     except Exception as e:
-        LOGGER.error("Failed to generate file hash:", exc_info=True)
+        logging.error("Failed to generate file hash:", exc_info=True)
         raise e
+@lru_cache()
 def load_hashes():
     hashes = {}
     if os.path.exists(HASH_FILE):
@@ -62,7 +62,7 @@ def backup_file(path: Path) -> str:
         cleanup_old_backups(path.name)
         return str(backup_path)
     except Exception as e:
-        LOGGER.error("Backup failed for {}: {}".format(path, e))
+        logging.error("Backup failed for {}: {}".format(path, e))
         raise e
 def cleanup_old_backups(filename: str):
     """Keep only recent backups for a file"""
@@ -75,7 +75,7 @@ def cleanup_old_backups(filename: str):
             backups[0].unlink()
             backups.pop(0)
     except Exception as e:
-        LOGGER.error("Backup cleanup failed: {}".format(e))
+        logging.error("Backup cleanup failed: {}".format(e))
         raise e
 def scan_and_detect_change():
     """Scan for file changes with improved error handling"""
@@ -118,12 +118,12 @@ def scan_and_detect_change():
                 formatter = logging.Formatter(LOGGING_FORMAT)
                 handler = logging.StreamHandler(sys.stdout)
                 handler.setFormatter(formatter)
-                LOGGER.addHandler(handler)
-                LOGGER.info("=== Changes detected at {} ===".format(datetime.now().isoformat()))
+                logging.getLogger(__name__).addHandler(handler)
+                logging.getLogger(__name__).info("=== Changes detected at {} ===".format(datetime.now().isoformat()))
                 for path, change_type in changes:
-                    LOGGER.info("{}: {}".format(change_type, path))
-            LOGGER.removeHandler(handler)
+                    logging.getLogger(__name__).info("{}: {}".format(change_type, path))
+            logging.getLogger(__name__).removeHandler(handler)
         return changes
     except Exception as e:
-        LOGGER.error("Scan and detect change failed:", exc_info=True)
+        logging.error("Scan and detect change failed:", exc_info=True)
         raise e
