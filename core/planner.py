@@ -1,4 +1,3 @@
-python
 # Importing essential libraries for this project
 import os
 import pathlib

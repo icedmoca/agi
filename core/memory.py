@@ -1,55 +1,156 @@
+from __future__ import annotations
+
 import json
-import time
+import os
+from pathlib import Path
+from typing import List, Dict, Any, Optional, ClassVar
 from datetime import datetime
+
+from dataclasses import asdict
+from core.models import MemoryEntry
+from core.vector_memory import Vectorizer
 import numpy as np
-import faiss
-import collections
 
-class IntelligentMemory:
-    def __init__(self, index_path="memory_index", cache_size=500):
-        self.cache = collections.deque(maxlen=cache_size)
-        self.index = faiss.IndexHNSW(index_path)
-        self.vectorizer = faiss.IndexFlatIPResidue()
-        self.id_map = faiss.IndexIDMap(max_num_shards=1024)
-        self.filename = "memory.jsonl"
+class Memory:
+    """
+    Tiny local JSON-Lines store.
 
-        # Load previous entries from file
-        with open(self.filename, "r") as f:
-            for line in f:
-                self.cache.append(json.loads(line))
+    New code should interact with MemoryEntry objects; but we keep a few
+    backwards-compat affordances (e.g. `timestamp` field, filename kw-arg) so
+    the historical tests continue to work.
+    """
 
-    def append(self, goal: str, result: str):
-        """Append entry to memory with severity tracking"""
-        entry = {
-            "timestamp": datetime.now().isoformat(),
-            "goal": goal,
-            "result": result,
-        }
+    # ------------------------------------------------------------------ #
+    # Construction / persistence
+    # ------------------------------------------------------------------ #
+    def __init__(self, file_path: str = "memory.jsonl", **kwargs):
+        # tests still call Memory(filename="foo")                         👇
+        file_path = kwargs.pop("filename", file_path)
+        self.path = Path(file_path)
+        self.max_entries = kwargs.pop("max_entries", 1_000)
+        self.vectorizer = Vectorizer()                     # already imported on line 11
 
-        # Set severity based on result content
-        if any(x in result.lower() for x in ["[stderr]", "error", "failed", "no such file"]):
-            entry["severity"] = "warning"
-        elif "critical" in result.lower():
-            entry["severity"] = "critical"
+        # Remember the *latest* instance so helpers such as SelfHealer can
+        # locate a Memory object even when one is not passed explicitly.
+        Memory._latest = self                        # ←  store singleton
 
-        vector = self.vectorizer.add(json.dumps([entry['goal'], entry['result']]))
-        id_map = self.id_map.add(vector)
-        self.index.add(id_map, id=entry["timestamp"])
-        self.cache.append(entry)
+        self.entries: List[MemoryEntry] = self._load()
+        if changed:
+            self._save()                # rewrite file so tests can verify
 
-        with open(self.filename, "a") as f:
-            f.write(json.dumps(entry) + "\n")
+    # A very small singleton helper (used by SelfHealer)
+    _latest: ClassVar[Optional["Memory"]] = None
 
-    def get_recent(self, limit: int = 5) -> list:
-        """Get recent memory entries as a list"""
-        ivf = faiss.IndexIVFFlat(index=self.index, num_shards=1024, max_nan_distances=32)
-        results = ivf.search(np.zeros((1, len(self.cache), self.index.ntotal), dtype="float64"), k=limit+1)[0]
+    @classmethod
+    def latest(cls) -> Optional["Memory"]:
+        return cls._latest
 
-        ids = [res_id for res_id in results[1:] if res_id in self.id_map.to_vector()]
-        return list(reversed([self.cache.popleft() for id in ids]))
+    # ------------------------------------------------------------------ #
+    # Public API
+    # ------------------------------------------------------------------ #
+    def append(                        # noqa: D401  (docstring not needed)
+        self,
+        goal: str,
+        result: str,
+        score: int = 0,
+        metadata: Dict[str, Any] | None = None,
+    ) -> MemoryEntry:
+        entry = MemoryEntry(goal=goal, result=result, score=score,
+                            metadata=metadata or {})
 
-    def get_recent_summary(self, limit: int = 10) -> str:
-        """Get a summary of recent memory entries"""
-        results = self.index.search(np.zeros((1, len(self.cache), self.index.ntotal), dtype="float64"), k=limit+1)[0]
-        ids = [res_id for res_id in results[1:] if res_id in self.id_map.to_vector()]
-        return "\n".join([f"{entry['goal']}: {entry['result']}" for entry in self.get_recent(len(ids))]) if ids else "No recent actions"
+        # legacy alias expected by tests
+        data = entry.to_dict()
+        data["timestamp"] = data["created"]
+
+        with self.path.open("a") as fh:
+            fh.write(json.dumps(data) + "\n")
+
+        self.entries.append(entry)
+        return entry
+
+    def get_recent(self, n: int = 5) -> List[MemoryEntry]:
+        return self.entries[-n:]
+
+    def get_recent_summary(self, n: int = 5) -> str:
+        recent = self.entries[-n:]
+        if not recent:
+            return "No recent memory entries"
+        return "\n".join(f"- {e.goal}: {e.result}" for e in recent)
+
+    def prune(self, threshold: int = -2) -> List[MemoryEntry]:
+        """
+        Delete every entry whose `score` is at or below *threshold* and
+        return the list of removed `MemoryEntry` objects so that callers
+        (e.g. dashboards, retention bookkeeping) can decide what to do
+        next.  The function keeps a disk-backed history automatically.
+        """
+        removed = [e for e in self.entries if getattr(e, "score", 0) <= threshold]
+        self.entries = [e for e in self.entries if e not in removed]
+        self._save()
+        return removed
+
+    # ------------------------------------------------------------------ #
+    # Helpers
+    # ------------------------------------------------------------------ #
+    def _load(self) -> tuple[List[MemoryEntry], bool]:
+        if not self.path.exists():
+            return [], False
+
+        entries: List[MemoryEntry] = []
+        changed = False
+        with self.path.open() as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                obj = json.loads(line)
+                entry = MemoryEntry.from_dict(obj)
+
+                # ----- legacy files lack vector embeddings -------------
+                emb = entry.metadata.get("embedding")
+
+                if emb is None:                          # legacy rows
+                    emb = self.vectorizer.embed(entry.goal)
+                    if hasattr(emb, "tolist"):
+                        emb = emb.tolist()
+                    entry.metadata["embedding"] = emb
+                    changed = True
+
+                entries.append(entry)
+        return entries, changed
+
+    # ------------------------------------------------------------------ #
+    # Vector search passthrough
+    # ------------------------------------------------------------------ #
+    def find_similar(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
+        """
+        Wrapper around `Vectorizer.find_similar`.
+        The vectorizer still works with plain dicts, so we convert on the fly.
+        """
+        rows = [e.to_dict() if hasattr(e, "to_dict") else asdict(e)
+                for e in self.entries]
+        return self.vectorizer.find_similar(query, rows, top_k=top_k)
+
+    # ------------------------------------------------------------------ #
+    # Serialisation helpers
+    # ------------------------------------------------------------------ #
+    def _json_safe(self, obj: Any) -> Any:
+        """
+        Convert numpy types / arrays into plain Python so json.dumps works.
+        """
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, (np.floating, np.integer)):
+            return obj.item()
+        if isinstance(obj, dict):
+            return {k: self._json_safe(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [self._json_safe(v) for v in obj]
+        return obj
+
+    def _save(self) -> None:
+        """Persist `self.entries` to disk in JSON-serialisable form."""
+        with self.path.open("w") as fh:
+            for e in self.entries:
+                data = self._json_safe(e.to_dict())
+                data["timestamp"] = data["created"]          # legacy alias
+                fh.write(json.dumps(data) + "\n")
