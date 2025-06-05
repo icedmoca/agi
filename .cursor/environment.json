@@ -1,7 +1,7 @@
 {
   "snapshot": "default",
   "user": "ubuntu",
-  "install": "pip install -r requirements.txt || true",
+  "install": "./.cursor/install.sh",
   "start": "",
   "terminals": [
     {
