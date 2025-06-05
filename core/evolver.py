@@ -842,17 +842,6 @@ def safe_apply_evolution(file_path: str, new_code: str, goal: str, memory: Memor
     except Exception as e:
         return {"status": "error", "output": f"Invalid syntax: {e}"}
 
-    path = Path(file_path)
-    original = path.read_text() if path.exists() else ""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup = Path(f"{file_path}.{timestamp}.bak")
-    if path.exists():
-        shutil.copy(file_path, backup)
-    else:
-        backup.touch()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(cleaned)
-
     diff = "\n".join(
         difflib.unified_diff(
             original.splitlines(),
@@ -862,11 +851,6 @@ def safe_apply_evolution(file_path: str, new_code: str, goal: str, memory: Memor
         )
     )
 
-    from core.reward import score_result
-    confidence = score_result(cleaned)
-    log_line = (
-        f"{datetime.now().isoformat()} | {file_path} | {goal} | diff_size:{len(diff.splitlines())} | confidence:{confidence}\n"
-    )
     Path("evolution_log.md").open("a").write(log_line)
 
     memory.append(

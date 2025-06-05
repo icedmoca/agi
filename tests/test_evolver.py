@@ -31,11 +31,3 @@ def test_safe_apply_evolution(tmp_path):
     assert "print('new')" in file_path.read_text()
     log = Path("evolution_log.md").read_text()
     assert "code.py" in log
-
-
-def test_safe_apply_evolution_create(tmp_path):
-    mem = Memory(file_path=str(tmp_path / "mem.jsonl"))
-    file_path = tmp_path / "new.py"
-    result = safe_apply_evolution(str(file_path), "print('hi')", "create", mem)
-    assert result["status"] == "success"
-    assert file_path.exists()

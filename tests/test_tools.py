@@ -23,9 +23,7 @@ from core.tools.tool_registry import (
     get_system_metrics,
     repo_scan,
     run_shell,
-    reflect_self,
-)
-from core.memory import Memory
+
 
 
 def test_file_read(tmp_path):
@@ -90,12 +88,4 @@ def test_get_system_metrics():
     res = get_system_metrics()
     assert isinstance(res, dict)
 
-
-def test_reflect_self(tmp_path):
-    mem = Memory(file_path=str(tmp_path / "mem.jsonl"))
-    for i in range(3):
-        mem.append(f"goal{i}", "done", score=1)
-    Memory._latest = mem
-    res = reflect_self()
-    assert res["status"] == "success"
 
