@@ -193,15 +193,43 @@ class Executor:
                 timeout=30,
                 **kwargs
             )
+            if result.returncode != 0 or result.stderr:
+                self._reflect_failure(shell_cmd, result.stderr or result.stdout)
             return result
         except subprocess.TimeoutExpired:
+            self._reflect_failure(shell_cmd if isinstance(cmd, str) else ' '.join(cmd), "Command timed out")
             return subprocess.CompletedProcess(
                 cmd, -1, stdout="", stderr="[ERROR] Command timed out"
             )
         except Exception as e:
+            self._reflect_failure(shell_cmd if isinstance(cmd, str) else ' '.join(cmd), str(e))
             return subprocess.CompletedProcess(
                 cmd, -1, stdout="", stderr=f"[ERROR] {str(e)}"
             )
+
+    def _reflect_failure(self, cmd: str, error: str) -> None:
+        """Use the LLM to reflect on failed shell commands and log to memory"""
+        try:
+            from core.chat import chat_with_llm
+            from core.memory import Memory
+            from core.reward import score_result
+
+            prompt = (
+                "This shell command failed:\n\n"
+                f"{cmd}\n\n"
+                f"Error:\n{error}\n\n"
+                "Why did it fail? Suggest a safer alternative."
+            )
+            reflection = chat_with_llm(prompt)
+            Memory().append(
+                goal=cmd,
+                result=reflection,
+                score=score_result(reflection),
+                metadata={"error": error, "timestamp": datetime.now().isoformat()},
+            )
+            logger.info("Reflection saved for failed command: %s", cmd)
+        except Exception as exc:
+            logger.error("Failed to record reflection: %s", exc)
 
     def execute_action(self, goal_description: str) -> str:
         """Execute an action safely with memory and fallbacks"""
@@ -222,6 +250,11 @@ class Executor:
                 ctype = cls.get("type", "other")
                 cleaned = cls.get("value", line).strip()
                 LOGGER.info("Command classification: %s - %s", ctype, cleaned)
+                if ctype == "interactive":
+                    reason = cls.get("reason", "Blocks on user input")
+                    LOGGER.warning(f"Skipped interactive command: {cleaned} — {reason}")
+                    skipped += 1
+                    continue
                 if ctype != "command":
                     LOGGER.warning("Skipped non-command: %s - %s", ctype, cleaned)
                     skipped += 1
@@ -359,6 +392,7 @@ def execute_action(command: str) -> str:
         command = re.sub(r'[`;&|]', '', command).strip()
 
         from core.intent_classifier import classify_intent
+        exec_ = Executor()
 
         outputs = []
         executed = 0
@@ -371,6 +405,11 @@ def execute_action(command: str) -> str:
             ctype = cls.get("type", "other")
             cleaned = cls.get("value", line).strip()
             LOGGER.info("Command classification: %s - %s", ctype, cleaned)
+            if ctype == "interactive":
+                reason = cls.get("reason", "Blocks on user input")
+                LOGGER.warning(f"Skipped interactive command: {cleaned} — {reason}")
+                skipped += 1
+                continue
             if ctype != "command":
                 LOGGER.warning("Skipped non-command: %s - %s", ctype, cleaned)
                 skipped += 1
@@ -411,17 +450,14 @@ def execute_action(command: str) -> str:
                     return error_msg
                 continue
 
-            result = subprocess.run(
+            proc = exec_.run_and_capture(
                 cleaned,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=30
+                cwd=exec_.working_dir
             )
             executed += 1
-            if result.returncode != 0:
-                return f"[ERROR] Return code: {result.returncode}\n{result.stderr}"
-            outputs.append(result.stdout.strip())
+            if proc.returncode != 0:
+                return f"[ERROR] Return code: {proc.returncode}\n{proc.stderr}"
+            outputs.append(proc.stdout.strip())
 
         logger.debug("Executed %d commands, skipped %d", executed, skipped)
         final_result = "\n".join(filter(None, outputs)) or "[SUCCESS] No output"

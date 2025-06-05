@@ -1,10 +1,23 @@
 import json
 import logging
+import re
 from typing import Dict
 
 from .chat import chat_with_llm
 
 logger = logging.getLogger(__name__)
+
+# Patterns that typically cause the shell to wait for user input
+_INTERACTIVE_PATTERNS = [
+    r"\bread\b",
+    r"\bselect\b",
+    r"\bpause\b",
+    r"\btrap\b",
+    r"\binput\b",
+    r"sleep\s+infinity",
+    r"while\s+true",
+    r"\bexpect\b",
+]
 
 _CLASSIFY_PROMPT = (
     "You are an intent classifier. Categorize the given text into one of the"
@@ -18,6 +31,11 @@ def classify_intent(text: str) -> Dict[str, str]:
     text = (text or "").strip()
     if not text:
         return {"type": "other", "value": ""}
+
+    lowered = text.lower()
+    for pat in _INTERACTIVE_PATTERNS:
+        if re.search(pat, lowered):
+            return {"type": "interactive", "value": text, "reason": "Blocks on user input"}
 
     try:
         response = chat_with_llm(
