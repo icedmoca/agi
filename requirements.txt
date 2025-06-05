@@ -3,3 +3,4 @@ jsonschema
 networkx
 psutil
 pandas
+numpy
