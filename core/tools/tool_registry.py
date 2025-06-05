@@ -13,6 +13,7 @@ except Exception:  # pragma: no cover - optional dependency
         pass
 import shlex
 import subprocess
+from core.intent_classifier import classify_llm_output
 
 logger = logging.getLogger(__name__)
 
@@ -178,23 +179,42 @@ def run_shell(command: str, timeout: int = 60, **kwargs) -> dict:
     try:
         from core.executor import Executor, is_valid_shell_command
         exec_ = Executor()
+
+        # LLM-based intent classification
+        classification = classify_llm_output(command)
+        ctype = classification.get("type", "other")
+        logger.info("Command classification: %s - %s", ctype, command)
+        if ctype != "command":
+            if ctype in {"explanation", "suggestion"}:
+                return {"status": "skipped", "output": command, "classification": ctype}
+            logger.warning("Skipped %s: %s", ctype, command)
+            return {"status": "error", "output": f"Skipped {ctype} text"}
+
         if not is_valid_shell_command(command):
             logger.warning("Skipped invalid shell command: %s", command)
             return {"status": "error", "output": "Rejected non-shell command"}
         # Remove timeout from kwargs since we're passing it explicitly
         kwargs.pop('timeout', None)
-        proc = exec_.run_and_capture(command, timeout=timeout)
-        
-        # Always return a properly formatted dictionary
-        if isinstance(proc, str):
-            return {"status": "error", "output": proc}
-        elif isinstance(proc, tuple):
-            returncode, stdout, stderr = proc
-            if returncode != 0:
-                return {"status": "error", "output": stderr or stdout, "returncode": returncode}
-            return {"status": "success", "output": stdout or "[SUCCESS] No output", "returncode": returncode}
-        else:
-            return {"status": "error", "output": "Invalid response format from executor"}
+        commands = [c.strip() for c in command.splitlines() if c.strip()]
+        outputs = []
+        for cmd in commands:
+            proc = exec_.run_and_capture(cmd, timeout=timeout)
+            if not isinstance(proc, subprocess.CompletedProcess):
+                return {"status": "error", "output": str(proc)}
+            if proc.returncode != 0:
+                return {
+                    "status": "error",
+                    "output": proc.stderr or proc.stdout,
+                    "returncode": proc.returncode,
+                }
+            outputs.append(proc.stdout)
+
+        combined = "\n".join(filter(None, outputs))
+        return {
+            "status": "success",
+            "output": combined or "[SUCCESS] No output",
+            "returncode": 0,
+        }
             
     except Exception as e:
         return {"status": "error", "output": str(e)}

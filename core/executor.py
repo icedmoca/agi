@@ -209,6 +209,13 @@ class Executor:
             # Sanitize command
             command = self.sanitize_command(goal_description)
 
+            from core.intent_classifier import classify_llm_output
+            classification = classify_llm_output(command)
+            ctype = classification.get("type", "other")
+            LOGGER.info("Command classification: %s - %s", ctype, command)
+            if ctype != "command":
+                return f"[SKIPPED] {ctype}"
+
             if not is_valid_shell_command(command):
                 LOGGER.warning("Rejected non-shell command: %s", command)
                 return "[ERROR] Rejected non-shell command"
@@ -337,6 +344,13 @@ def execute_action(command: str) -> str:
     try:
         # Sanitize command for safety
         command = re.sub(r'[`;&|]', '', command).strip()
+
+        from core.intent_classifier import classify_llm_output
+        classification = classify_llm_output(command)
+        ctype = classification.get("type", "other")
+        LOGGER.info("Command classification: %s - %s", ctype, command)
+        if ctype != "command":
+            return f"[SKIPPED] {ctype}"
 
         if not is_valid_shell_command(command):
             LOGGER.warning("Skipped invalid shell command: %s", command)
