@@ -46,6 +46,16 @@ def _log_trace(trace: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Failed to log trace: {e}")
 
+def _log_tool_trace(trace: Dict[str, Any]):
+    """Log tool executions to output/tool_traces.jsonl"""
+    try:
+        trace_file = Path("output/tool_traces.jsonl")
+        trace_file.parent.mkdir(exist_ok=True)
+        with trace_file.open("a") as f:
+            f.write(json.dumps(trace) + "\n")
+    except Exception as e:
+        logger.error(f"Failed to log tool trace: {e}")
+
 def _normalize_result(r):
     """
     Ensure every tool result is a dict with at least 'status' and 'output'.
@@ -92,15 +102,45 @@ class ToolRegistry:
         return "\n".join(descriptions)
         
     def run_tool(self, name: str, args: dict, max_retries: int = 0):
+        """Execute a registered tool with retry and logging."""
+        import time
+        from core.memory import Memory
+
         tool_fn = self.tools[name]
+        delay = 0.5
         for attempt in range(max_retries + 1):
+            start = datetime.now()
             try:
                 raw = tool_fn(**args)
-                return _normalize_result(raw)
+                result = _normalize_result(raw)
+                status = result.get("status", "success")
+                return result
             except Exception as e:
+                result = {"status": "error", "output": str(e)}
+                status = "error"
                 if attempt < max_retries:
-                    continue
-                return {"status": "error", "output": str(e)}
+                    time.sleep(delay)
+                    delay *= 2
+                else:
+                    return result
+            finally:
+                trace = {
+                    "timestamp": datetime.now().isoformat(),
+                    "tool": name,
+                    "args": args,
+                    "status": status,
+                    "attempt": attempt,
+                    "duration": (datetime.now() - start).total_seconds(),
+                    "output": result.get("output"),
+                }
+                _log_tool_trace(trace)
+                mem = Memory.latest()
+                if mem:
+                    mem.append(
+                        goal=f"tool:{name}",
+                        result=str(result.get("output")),
+                        metadata={"type": "tool_use", "args": args, "status": status},
+                    )
 
 # Initialize global registry
 registry = ToolRegistry()

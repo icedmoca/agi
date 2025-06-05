@@ -8,7 +8,10 @@ import re
 import platform
 import logging
 import shutil
-import psutil
+try:
+    import psutil
+except ImportError:  # pragma: no cover
+    psutil = None
 
 logger = logging.getLogger(__name__)
 
@@ -517,7 +520,10 @@ class SystemFetcher:
             "summary": {},
             "details": {}
         }
-        
+
+        if psutil is None:
+            return {"error": "psutil not installed. Please install via pip"}
+
         try:
             # Get disk space
             disk_info = psutil.disk_usage('/')
