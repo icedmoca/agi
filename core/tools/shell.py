@@ -1,6 +1,10 @@
+from core.executor import is_likely_shell_command
+
 def run_shell(command: str) -> dict:
     """Execute a shell command and return standardized output"""
     try:
+        if not is_likely_shell_command(command):
+            return {"status": "error", "output": "Rejected non-shell command", "returncode": -1}
         import subprocess
         result = subprocess.run(
             command,
@@ -19,4 +23,4 @@ def run_shell(command: str) -> dict:
             "status": "error",
             "output": str(e),
             "returncode": -1
-        } 
+        }

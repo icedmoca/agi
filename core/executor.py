@@ -17,6 +17,18 @@ import logging
 from pathlib import Path
 import shlex
 
+# Simple heuristic to further validate potential shell commands
+def is_likely_shell_command(cmd: str) -> bool:
+    """Filter out plain English or garbage LLM text."""
+    shell_keywords = [
+        "echo", "cd", "ls", "cat", "touch", "mkdir",
+        "rm", "python", "pip", "for", "while"
+    ]
+    return (
+        any(cmd.strip().startswith(k) for k in shell_keywords)
+        and not re.search(r"[a-zA-Z]{5,}.*\s[a-zA-Z]{5,}", cmd)
+    )
+
 # Configure module logger
 logger = logging.getLogger(__name__)
 
@@ -49,7 +61,7 @@ class Executor:
         first = tokens[0].lower()
         if first.startswith(('./', '/')) or first.endswith('.sh'):
             return True
-        return first in self.valid_prefixes
+        return first in self.valid_prefixes and is_likely_shell_command(command)
         
     def run_command(self, command: str) -> Tuple[int, str, str]:
         """Execute a shell command and return (returncode, stdout, stderr)"""
@@ -59,8 +71,8 @@ class Executor:
             if command.startswith('$'):
                 command = command[1:].strip()
 
-            if not self._is_shell_command(command):
-                logger.warning("Rejected non-shell command: %s", command)
+            if not self._is_shell_command(command) or not is_likely_shell_command(command):
+                logger.warning("Skipped invalid shell command: %s", command)
                 return 1, "", "Rejected non-shell command"
 
             args = shlex.split(command)
@@ -142,7 +154,7 @@ class Executor:
     def run_and_capture(self, cmd: List[str], **kwargs) -> subprocess.CompletedProcess:
         """Run a command and capture output safely"""
         try:
-            if not cmd or not self._is_shell_command(cmd[0]):
+            if not cmd or not self._is_shell_command(cmd[0]) or not is_likely_shell_command(' '.join(cmd)):
                 return subprocess.CompletedProcess(cmd, -1, stdout="", stderr="[ERROR] Rejected non-shell command")
 
             result = subprocess.run(
@@ -297,8 +309,8 @@ def execute_action(command: str) -> str:
         # Sanitize command for safety
         command = re.sub(r'[`;&|]', '', command).strip()
 
-        if not Executor()._is_shell_command(command):
-            LOGGER.warning("Rejected non-shell command: %s", command)
+        if not Executor()._is_shell_command(command) or not is_likely_shell_command(command):
+            LOGGER.warning("Skipped invalid shell command: %s", command)
             return "[ERROR] Rejected non-shell command"
         
         # Handle evolution requests specially
