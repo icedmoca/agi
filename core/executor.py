@@ -209,30 +209,44 @@ class Executor:
             # Sanitize command
             command = self.sanitize_command(goal_description)
 
-            from core.intent_classifier import classify_llm_output
-            classification = classify_llm_output(command)
-            ctype = classification.get("type", "other")
-            LOGGER.info("Command classification: %s - %s", ctype, command)
-            if ctype != "command":
-                return f"[SKIPPED] {ctype}"
+            from core.intent_classifier import classify_intent
 
-            if not is_valid_shell_command(command):
-                LOGGER.warning("Rejected non-shell command: %s", command)
-                return "[ERROR] Rejected non-shell command"
+            outputs = []
+            executed = 0
+            skipped = 0
 
-            # Handle evolution requests
-            if command.lower().startswith("evolve ") and " to " in command:
-                return self._handle_evolution(command)
-                    
-            # Execute normal command
-            result = self.run_and_capture(
-                command,
-                cwd=self.working_dir
-            )
-            
-            if result.returncode != 0:
-                return f"[ERROR] Return code {result.returncode}\n{result.stderr}"
-            return result.stdout or "[SUCCESS] No output"
+            for line in command.splitlines():
+                if not line.strip():
+                    continue
+                cls = classify_intent(line)
+                ctype = cls.get("type", "other")
+                cleaned = cls.get("value", line).strip()
+                LOGGER.info("Command classification: %s - %s", ctype, cleaned)
+                if ctype != "command":
+                    LOGGER.warning("Skipped non-command: %s - %s", ctype, cleaned)
+                    skipped += 1
+                    continue
+                if not is_valid_shell_command(cleaned):
+                    LOGGER.warning("Rejected non-shell command: %s", cleaned)
+                    skipped += 1
+                    continue
+
+                if cleaned.lower().startswith("evolve ") and " to " in cleaned:
+                    return self._handle_evolution(cleaned)
+
+                result = self.run_and_capture(
+                    cleaned,
+                    cwd=self.working_dir
+                )
+                executed += 1
+                if result.returncode != 0:
+                    return f"[ERROR] Return code {result.returncode}\n{result.stderr}"
+                outputs.append(result.stdout)
+
+            logger.debug("Executed %d commands, skipped %d", executed, skipped)
+            if executed == 0:
+                return "[SKIPPED]"
+            return "\n".join(filter(None, outputs)) or "[SUCCESS] No output"
             
         except Exception as e:
             error_msg = f"[ERROR] {str(e)}\n{traceback.format_exc()}"
@@ -342,86 +356,80 @@ class Executor:
 def execute_action(command: str) -> str:
     """Run a shell command and return its output"""
     try:
-        # Sanitize command for safety
         command = re.sub(r'[`;&|]', '', command).strip()
 
-        from core.intent_classifier import classify_llm_output
-        classification = classify_llm_output(command)
-        ctype = classification.get("type", "other")
-        LOGGER.info("Command classification: %s - %s", ctype, command)
-        if ctype != "command":
-            return f"[SKIPPED] {ctype}"
+        from core.intent_classifier import classify_intent
 
-        if not is_valid_shell_command(command):
-            LOGGER.warning("Skipped invalid shell command: %s", command)
-            return "[ERROR] Rejected non-shell command"
-        
-        # Handle evolution requests specially
-        if command.lower().startswith("evolve ") and " to " in command:
-            try:
-                parts = command.split(" to ", 1)
-                filename = parts[0].replace("evolve ", "").strip()
-                improvement = parts[1].strip()
-                
-                if not filename.endswith('.py'):
-                    return "[ERROR] Only Python files can be evolved"
-                    
-                file_path = f"core/{filename}"
-                if not os.path.isfile(file_path):
-                    return "[ERROR] File not found or unsafe request"
-                    
-                from core.evolver import evolve_file
-                result = evolve_file(goal=improvement, file_path=file_path)
-                
-                # Clean generated code before returning
-                result = clean_generated_code(result)
-                
-                # Update memory
-                from core.memory import Memory
-                mem = Memory()
-                mem.append(f"evolve {filename}", result)
-                
-                # Show recent context
-                recent = mem.get_recent(5)
-                if recent:
-                    print("\n📚 Recent Evolution Context:")
-                    for entry in recent:
-                        score = entry.get("score", "?")
-                        print(f"[MEMORY] {entry['goal']} ➜ {entry['result']} (score: {score})")
-                    print()
-                
-                return result
-                
-            except Exception as e:
-                error_msg = f"[ERROR] Evolution failed: {str(e)}"
-                # Log error to memory
-                from core.memory import Memory
-                Memory().append(command, error_msg)
-                return error_msg
+        outputs = []
+        executed = 0
+        skipped = 0
 
-        # Execute normal shell command
-        result = subprocess.run(
-            command, 
-            shell=True, 
-            capture_output=True, 
-            text=True, 
-            timeout=30
-        )
-        
-        output = result.stdout.strip()
-        error = result.stderr.strip()
-        
-        if result.returncode != 0:
-            final_result = f"[ERROR] Return code: {result.returncode}\n{error}"
-        else:
-            final_result = output or "[SUCCESS] No output"
-            
-        # Add memory feedback for command execution
+        for line in command.splitlines():
+            if not line.strip():
+                continue
+            cls = classify_intent(line)
+            ctype = cls.get("type", "other")
+            cleaned = cls.get("value", line).strip()
+            LOGGER.info("Command classification: %s - %s", ctype, cleaned)
+            if ctype != "command":
+                LOGGER.warning("Skipped non-command: %s - %s", ctype, cleaned)
+                skipped += 1
+                continue
+            if not is_valid_shell_command(cleaned):
+                LOGGER.warning("Skipped invalid shell command: %s", cleaned)
+                skipped += 1
+                continue
+
+            if cleaned.lower().startswith("evolve ") and " to " in cleaned:
+                try:
+                    parts = cleaned.split(" to ", 1)
+                    filename = parts[0].replace("evolve ", "").strip()
+                    improvement = parts[1].strip()
+                    if not filename.endswith('.py'):
+                        return "[ERROR] Only Python files can be evolved"
+                    file_path = f"core/{filename}"
+                    if not os.path.isfile(file_path):
+                        return "[ERROR] File not found or unsafe request"
+                    from core.evolver import evolve_file
+                    result = evolve_file(goal=improvement, file_path=file_path)
+                    result = clean_generated_code(result)
+                    from core.memory import Memory
+                    mem = Memory()
+                    mem.append(f"evolve {filename}", result)
+                    recent = mem.get_recent(5)
+                    if recent:
+                        print("\n📚 Recent Evolution Context:")
+                        for entry in recent:
+                            score = entry.get("score", "?")
+                            print(f"[MEMORY] {entry['goal']} ➜ {entry['result']} (score: {score})")
+                        print()
+                    return result
+                except Exception as e:
+                    error_msg = f"[ERROR] Evolution failed: {str(e)}"
+                    from core.memory import Memory
+                    Memory().append(cleaned, error_msg)
+                    return error_msg
+                continue
+
+            result = subprocess.run(
+                cleaned,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            executed += 1
+            if result.returncode != 0:
+                return f"[ERROR] Return code: {result.returncode}\n{result.stderr}"
+            outputs.append(result.stdout.strip())
+
+        logger.debug("Executed %d commands, skipped %d", executed, skipped)
+        final_result = "\n".join(filter(None, outputs)) or "[SUCCESS] No output"
+
         from core.memory import Memory
         mem = Memory()
         mem.append(command, final_result)
-        
-        # Show recent context
+
         recent = mem.get_recent(5)
         if recent:
             print("\n📚 Recent Memory Context:")
@@ -429,7 +437,7 @@ def execute_action(command: str) -> str:
                 score = entry.get("score", "?")
                 print(f"[MEMORY] {entry['goal']} ➜ {entry['result']} (score: {score})")
             print()
-            
+
         return final_result
         
     except Exception as e:

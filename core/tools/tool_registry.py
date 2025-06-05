@@ -13,7 +13,7 @@ except Exception:  # pragma: no cover - optional dependency
         pass
 import shlex
 import subprocess
-from core.intent_classifier import classify_llm_output
+from core.intent_classifier import classify_intent
 
 logger = logging.getLogger(__name__)
 
@@ -180,25 +180,27 @@ def run_shell(command: str, timeout: int = 60, **kwargs) -> dict:
         from core.executor import Executor, is_valid_shell_command
         exec_ = Executor()
 
-        # LLM-based intent classification
-        classification = classify_llm_output(command)
-        ctype = classification.get("type", "other")
-        logger.info("Command classification: %s - %s", ctype, command)
-        if ctype != "command":
-            if ctype in {"explanation", "suggestion"}:
-                return {"status": "skipped", "output": command, "classification": ctype}
-            logger.warning("Skipped %s: %s", ctype, command)
-            return {"status": "error", "output": f"Skipped {ctype} text"}
-
-        if not is_valid_shell_command(command):
-            logger.warning("Skipped invalid shell command: %s", command)
-            return {"status": "error", "output": "Rejected non-shell command"}
-        # Remove timeout from kwargs since we're passing it explicitly
         kwargs.pop('timeout', None)
-        commands = [c.strip() for c in command.splitlines() if c.strip()]
         outputs = []
-        for cmd in commands:
-            proc = exec_.run_and_capture(cmd, timeout=timeout)
+        executed = 0
+        skipped = 0
+
+        for line in command.splitlines():
+            if not line.strip():
+                continue
+            classification = classify_intent(line)
+            ctype = classification.get("type", "other")
+            cleaned = classification.get("value", line).strip()
+            if ctype != "command":
+                logger.warning("Skipped non-command: %s - %s", ctype, cleaned)
+                skipped += 1
+                continue
+            if not is_valid_shell_command(cleaned):
+                logger.warning("Skipped invalid shell command: %s", cleaned)
+                skipped += 1
+                continue
+
+            proc = exec_.run_and_capture(cleaned, timeout=timeout)
             if not isinstance(proc, subprocess.CompletedProcess):
                 return {"status": "error", "output": str(proc)}
             if proc.returncode != 0:
@@ -207,7 +209,10 @@ def run_shell(command: str, timeout: int = 60, **kwargs) -> dict:
                     "output": proc.stderr or proc.stdout,
                     "returncode": proc.returncode,
                 }
+            executed += 1
             outputs.append(proc.stdout)
+
+        logger.debug("Executed %d commands, skipped %d", executed, skipped)
 
         combined = "\n".join(filter(None, outputs))
         return {

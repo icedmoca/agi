@@ -13,11 +13,12 @@ _CLASSIFY_PROMPT = (
 )
 
 
-def classify_llm_output(text: str) -> Dict[str, str]:
-    """Classify LLM output text into an intent type using the LLM itself."""
+def classify_intent(text: str) -> Dict[str, str]:
+    """Return a structured intent classification for the given text."""
     text = (text or "").strip()
     if not text:
-        return {"type": "other"}
+        return {"type": "other", "value": ""}
+
     try:
         response = chat_with_llm(
             user_input=f"Text:\n{text}",
@@ -27,12 +28,21 @@ def classify_llm_output(text: str) -> Dict[str, str]:
         )
         data = json.loads(response)
         if isinstance(data, dict) and data.get("type"):
-            return {"type": str(data["type"]).lower()}
+            intent_type = str(data.get("type", "other")).lower()
+            value = (data.get("value") or text).strip()
+            return {"type": intent_type, "value": value}
     except Exception as e:
         logger.error("LLM classification failed: %s", e)
-    # Fallback heuristic
+
     try:
         from .executor import is_valid_shell_command
-        return {"type": "command" if is_valid_shell_command(text) else "other"}
+        intent_type = "command" if is_valid_shell_command(text) else "other"
     except Exception:
-        return {"type": "other"}
+        intent_type = "other"
+    return {"type": intent_type, "value": text}
+
+
+def classify_llm_output(text: str) -> Dict[str, str]:
+    """Backwards compatibility wrapper around :func:`classify_intent`."""
+    result = classify_intent(text)
+    return {"type": result.get("type", "other")}
