@@ -842,13 +842,6 @@ def safe_apply_evolution(file_path: str, new_code: str, goal: str, memory: Memor
     except Exception as e:
         return {"status": "error", "output": f"Invalid syntax: {e}"}
 
-    original = Path(file_path).read_text()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup = Path(f"{file_path}.{timestamp}.bak")
-    shutil.copy(file_path, backup)
-
-    Path(file_path).write_text(cleaned)
-
     diff = "\n".join(
         difflib.unified_diff(
             original.splitlines(),
@@ -858,7 +851,6 @@ def safe_apply_evolution(file_path: str, new_code: str, goal: str, memory: Memor
         )
     )
 
-    log_line = f"{datetime.now().isoformat()} | {file_path} | {goal} | diff_size:{len(diff.splitlines())}\n"
     Path("evolution_log.md").open("a").write(log_line)
 
     memory.append(

@@ -34,4 +34,3 @@ The tool registry exposes several helper functions used by the planner:
 - `run_shell(command)` – execute a shell command safely.
 - `evolve_file(goal, file_path)` – evolve code using the LLM engine.
 - `open_browser(url)` – open a web page in the default browser.
-

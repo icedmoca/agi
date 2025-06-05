@@ -275,7 +275,9 @@ def _stream_chat(
             
         # Return final sanitized response
         final_response = "".join(response_chunks)
-        return sanitize_llm_response(final_response, format)
+        cleaned = sanitize_llm_response(final_response, format)
+        _log_llm_history(system_prompt, user_input, cleaned, model)
+        return cleaned
         
     except ImportError:
         yield "[ERROR] Streaming not supported without ollama package"
@@ -313,7 +315,9 @@ def _single_chat(
             ]
         )
         result = sanitize_llm_response(response["message"]["content"], format)
-        
+
+    _log_llm_history(system_prompt, user_input, result, model)
+    
     return result
 
 def log_chat(
@@ -335,4 +339,17 @@ def log_chat(
     log_file.parent.mkdir(parents=True, exist_ok=True)
     
     with log_file.open("a") as f:
-        f.write(json.dumps(log_entry) + "\n") 
+        f.write(json.dumps(log_entry) + "\n")
+
+def _log_llm_history(system_prompt: str, user_input: str, output: str, model: str) -> None:
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "model": model,
+        "system_prompt": system_prompt,
+        "user_input": user_input,
+        "output": output,
+    }
+    log_file = Path("output/llm_history.jsonl")
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    with log_file.open("a") as f:
+        f.write(json.dumps(entry) + "\n")

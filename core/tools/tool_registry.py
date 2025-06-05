@@ -270,6 +270,27 @@ def repo_scan(pattern: str = "*") -> dict:
     matches = [str(p) for p in Path('.').rglob(pattern)]
     return {"status": "success", "output": "\n".join(matches)}
 
+@log_tool_call
+def reflect_self() -> dict:
+    """Summarise recent memory and suggest improvements"""
+    from core.memory import Memory
+    mem = Memory.latest()
+    if not mem:
+        return {"status": "error", "output": "memory unavailable"}
+    recent = mem.get_recent(10)
+    successes = [e for e in recent if e.score > 0][-5:]
+    failures = [e for e in recent if e.score <= 0][-5:]
+    summary_lines = ["Architecture modules: " + ", ".join(sorted(p.stem for p in Path('core').glob('*.py')))]
+    if successes:
+        summary_lines.append("Last successes:" )
+        summary_lines.extend(f"- {e.goal} ({e.score})" for e in successes)
+    if failures:
+        summary_lines.append("Recent failures:" )
+        summary_lines.extend(f"- {e.goal} ({e.score})" for e in failures)
+    suggestion = "Improve error handling" if failures else "Continue current plan"
+    summary_lines.append(f"Next evolution suggestion: {suggestion}")
+    return {"status": "success", "output": "\n".join(summary_lines)}
+
 # Register tools with schemas
 registry.register("evolve_file", evolve_file, {
     "description": "Evolve a code file based on improvement goal",
@@ -398,4 +419,9 @@ registry.register("repo_scan", repo_scan, {
             "pattern": {"type": "string", "description": "Glob pattern"}
         }
     }
+})
+
+registry.register("reflect_self", reflect_self, {
+    "description": "Summarise recent memory and suggest self-improvements",
+    "parameters": {"type": "object", "properties": {}}
 })
