@@ -34,12 +34,4 @@ The tool registry exposes several helper functions used by the planner:
 - `run_shell(command)` – execute a shell command safely.
 - `evolve_file(goal, file_path)` – evolve code using the LLM engine.
 - `open_browser(url)` – open a web page in the default browser.
- - `git_commit(message)` – commit current repository changes.
- - `web_search(query)` – perform a simple web search.
 
-Every tool call is traced to `output/tool_traces.jsonl` with arguments,
-output and a score. The result is stored in `Memory` with task metadata so that
-future plans can recall successful steps.
-
-Evolutions are applied via `safe_apply_evolution` which validates syntax,
-creates a timestamped backup and logs the diff to `evolution_log.md`.
