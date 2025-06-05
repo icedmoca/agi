@@ -303,7 +303,7 @@ class SystemFetcher:
             
             if self.is_windows:
                 # Windows performance counters
-                ps_cmd = """
+                ps_cmd = r"""
                 Get-Counter -Counter @(
                     '\Processor(_Total)\% Processor Time',
                     '\Memory\Available MBytes',

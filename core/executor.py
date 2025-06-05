@@ -32,6 +32,24 @@ class Executor:
         self.working_dir = Path(working_dir)
         self.timeout = 60  # Default timeout in seconds
         self.max_output = 1024 * 1024  # 1MB output limit
+        self.valid_prefixes = {
+            "cd", "ls", "echo", "cat", "grep", "find", "pwd", "touch",
+            "mkdir", "rm", "cp", "mv", "python", "pytest", "pip", "git",
+            "sed", "awk", "head", "tail", "du", "df", "chmod", "chown",
+        }
+
+    def _is_shell_command(self, command: str) -> bool:
+        """Simple heuristic to determine if text looks like a shell command"""
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            return False
+        if not tokens:
+            return False
+        first = tokens[0].lower()
+        if first.startswith(('./', '/')) or first.endswith('.sh'):
+            return True
+        return first in self.valid_prefixes
         
     def run_command(self, command: str) -> Tuple[int, str, str]:
         """Execute a shell command and return (returncode, stdout, stderr)"""
@@ -40,7 +58,11 @@ class Executor:
             command = command.strip()
             if command.startswith('$'):
                 command = command[1:].strip()
-                
+
+            if not self._is_shell_command(command):
+                logger.warning("Rejected non-shell command: %s", command)
+                return 1, "", "Rejected non-shell command"
+
             args = shlex.split(command)
             
             # Execute command with proper error handling
@@ -120,6 +142,9 @@ class Executor:
     def run_and_capture(self, cmd: List[str], **kwargs) -> subprocess.CompletedProcess:
         """Run a command and capture output safely"""
         try:
+            if not cmd or not self._is_shell_command(cmd[0]):
+                return subprocess.CompletedProcess(cmd, -1, stdout="", stderr="[ERROR] Rejected non-shell command")
+
             result = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -142,7 +167,11 @@ class Executor:
         try:
             # Sanitize command
             command = self.sanitize_command(goal_description)
-            
+
+            if not self._is_shell_command(command):
+                LOGGER.warning("Rejected non-shell command: %s", command)
+                return "[ERROR] Rejected non-shell command"
+
             # Handle evolution requests
             if command.lower().startswith("evolve ") and " to " in command:
                 return self._handle_evolution(command)
@@ -267,6 +296,10 @@ def execute_action(command: str) -> str:
     try:
         # Sanitize command for safety
         command = re.sub(r'[`;&|]', '', command).strip()
+
+        if not Executor()._is_shell_command(command):
+            LOGGER.warning("Rejected non-shell command: %s", command)
+            return "[ERROR] Rejected non-shell command"
         
         # Handle evolution requests specially
         if command.lower().startswith("evolve ") and " to " in command:
