@@ -1,0 +1,14 @@
+{
+  "snapshot": "default",
+  "user": "ubuntu",
+  "install": "./.cursor/install.sh",
+  "start": "",
+  "terminals": [
+    {
+      "name": "agi",
+      "command": "python main.py --interactive",
+      "description": "Starts AGI loop"
+    }
+  ]
+}
+ 
