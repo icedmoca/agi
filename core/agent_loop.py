@@ -78,6 +78,7 @@ class Agent:
         self.skip_non_critical = False
         self.command_override = True  # Add flag for command override
         self._critical_total = 0      # keeps track of critical alerts
+        self.failure_counts = defaultdict(int)
         
     def setup_signal_handlers(self):
         """Setup clean shutdown on Ctrl+C"""
@@ -474,9 +475,13 @@ class Agent:
             # Validate command safety
             if not self.is_command_allowed(goal):
                 return "rejected", "Command blocked by policy"
-                
+
             result = self.executor.execute_action(goal)
-            return "success", result
+            status = "success"
+            if result.startswith("[ERROR]"):
+                status = "failed"
+                self._record_failure(goal, result)
+            return status, result
             
         except Exception as e:
             return "failed", f"Command failed: {str(e)}"
@@ -1271,6 +1276,43 @@ class Agent:
         except Exception as e:
             logger.error(f"Failed to reweight recommendations: {e}")
             return {}
+
+    # ------------------------------------------------------------------ #
+    # Failure pattern tracking and self-evolution suggestions
+    # ------------------------------------------------------------------ #
+    def _hash_failure(self, cmd: str, error: str) -> str:
+        base = (cmd.split() or ["unknown"])[0]
+        if "not found" in error.lower():
+            cat = "notfound"
+        elif "permission" in error.lower():
+            cat = "permission"
+        else:
+            cat = "other"
+        return f"{base}:{cat}"
+
+    def _record_failure(self, cmd: str, error: str) -> None:
+        key = self._hash_failure(cmd, error)
+        self.failure_counts[key] += 1
+        if self.failure_counts[key] > 3:
+            try:
+                prompt = (
+                    "I've encountered repeated failures with commands like:\n\n"
+                    f"{cmd}\nError: {error}\n\n"
+                    "How should I modify my prompt, execution, or filtering behavior to avoid this?"
+                )
+                suggestion = chat_with_llm(prompt)
+                self.memory.append(
+                    goal="evolve failure pattern",
+                    result=suggestion,
+                    metadata={
+                        "pattern": key,
+                        "count": self.failure_counts[key],
+                        "timestamp": datetime.now().isoformat(),
+                    },
+                )
+                logger.info("Evolution suggestion recorded for pattern: %s", key)
+            except Exception as exc:
+                logger.error("Failed to record evolution suggestion: %s", exc)
 
     def _llm_call(self, prompt: str) -> str:
         """
