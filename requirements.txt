@@ -1,0 +1,5 @@
+requests
+jsonschema
+networkx
+psutil
+pandas

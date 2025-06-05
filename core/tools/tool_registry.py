@@ -167,6 +167,42 @@ def open_browser(url: str) -> str:
     webbrowser.open(url)
     return f"Opened {url}"
 
+@log_tool_call
+def file_read(path: str) -> dict:
+    """Return the contents of a text file"""
+    from pathlib import Path
+    p = Path(path)
+    if not p.exists():
+        return {"status": "error", "output": f"{path} not found"}
+    try:
+        return {"status": "success", "output": p.read_text()}
+    except Exception as e:
+        return {"status": "error", "output": str(e)}
+
+@log_tool_call
+def internet_fetch(url: str) -> dict:
+    """Fetch raw data from a URL"""
+    import requests
+    try:
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+        return {"status": "success", "output": resp.text}
+    except Exception as e:
+        return {"status": "error", "output": str(e)}
+
+@log_tool_call
+def os_metrics() -> dict:
+    """Return basic OS telemetry"""
+    from core.tools.fetcher import SystemFetcher
+    return SystemFetcher().get_system_telemetry()
+
+@log_tool_call
+def repo_scan(pattern: str = "*") -> dict:
+    """List repository files matching a glob"""
+    from pathlib import Path
+    matches = [str(p) for p in Path('.').rglob(pattern)]
+    return {"status": "success", "output": "\n".join(matches)}
+
 # Register tools with schemas
 registry.register("evolve_file", evolve_file, {
     "description": "Evolve a code file based on improvement goal",
@@ -235,4 +271,41 @@ registry.register("open_browser", open_browser, {
         },
         "required": ["url"]
     }
-}) 
+})
+
+registry.register("file_read", file_read, {
+    "description": "Read a text file",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "File path"}
+        },
+        "required": ["path"]
+    }
+})
+
+registry.register("internet_fetch", internet_fetch, {
+    "description": "Fetch content from a URL",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "URL"}
+        },
+        "required": ["url"]
+    }
+})
+
+registry.register("os_metrics", os_metrics, {
+    "description": "Retrieve basic OS metrics",
+    "parameters": {"type": "object", "properties": {}}
+})
+
+registry.register("repo_scan", repo_scan, {
+    "description": "List repository files matching a glob",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "pattern": {"type": "string", "description": "Glob pattern"}
+        }
+    }
+})
