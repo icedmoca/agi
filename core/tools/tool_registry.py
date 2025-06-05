@@ -4,7 +4,13 @@ import logging
 import json
 from datetime import datetime
 from functools import wraps
-from jsonschema import validate, ValidationError
+try:
+    from jsonschema import validate, ValidationError  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    def validate(instance, schema):
+        return True
+    class ValidationError(Exception):
+        pass
 import shlex
 import subprocess
 
@@ -234,13 +240,18 @@ def file_read(path: str) -> dict:
 @log_tool_call
 def internet_fetch(url: str) -> dict:
     """Fetch raw data from a URL"""
-    import requests
     try:
+        import requests
         resp = requests.get(url, timeout=30)
         resp.raise_for_status()
         return {"status": "success", "output": resp.text}
-    except Exception as e:
-        return {"status": "error", "output": str(e)}
+    except Exception:
+        try:
+            from urllib.request import urlopen
+            with urlopen(url) as resp:
+                return {"status": "success", "output": resp.read().decode()}
+        except Exception as e:
+            return {"status": "error", "output": str(e)}
 
 @log_tool_call
 def fetch_url(url: str) -> dict:
@@ -281,15 +292,48 @@ def reflect_self() -> dict:
     successes = [e for e in recent if e.score > 0][-5:]
     failures = [e for e in recent if e.score <= 0][-5:]
     summary_lines = ["Architecture modules: " + ", ".join(sorted(p.stem for p in Path('core').glob('*.py')))]
+    from core.analysis import failure_stats
+    stats = failure_stats(mem)
     if successes:
         summary_lines.append("Last successes:" )
         summary_lines.extend(f"- {e.goal} ({e.score})" for e in successes)
     if failures:
         summary_lines.append("Recent failures:" )
         summary_lines.extend(f"- {e.goal} ({e.score})" for e in failures)
+    if stats["tags"]:
+        summary_lines.append("Weak tags:" )
+        summary_lines.extend(f"- {tag}: {cnt}" for tag, cnt in stats["tags"])
     suggestion = "Improve error handling" if failures else "Continue current plan"
     summary_lines.append(f"Next evolution suggestion: {suggestion}")
     return {"status": "success", "output": "\n".join(summary_lines)}
+
+@log_tool_call
+def agent_identity() -> dict:
+    """Return a short self-description using memory and docs."""
+    from core.memory import Memory
+    mem = Memory.latest()
+    successes = sum(1 for e in mem.entries if e.score > 0) if mem else 0
+    failures = sum(1 for e in mem.entries if e.score <= 0) if mem else 0
+    arch_path = Path("docs/ARCHITECTURE.md")
+    arch_summary = arch_path.read_text().splitlines()[0] if arch_path.exists() else ""
+    summary = (
+        f"Who am I? An adaptive agent.\n"
+        f"What do I do well? {successes} successes recorded.\n"
+        f"What have I failed at? {failures} tasks.\n"
+        f"{arch_summary}"
+    )
+    return {"status": "success", "output": summary}
+
+@log_tool_call
+def build_memory_map_tool() -> dict:
+    """Generate memory map JSON grouped by tag and score."""
+    from core.memory import Memory
+    from core.analysis import build_memory_map
+    mem = Memory.latest()
+    if not mem:
+        return {"status": "error", "output": "memory unavailable"}
+    summary = build_memory_map(mem)
+    return {"status": "success", "output": json.dumps(summary)}
 
 # Register tools with schemas
 registry.register("evolve_file", evolve_file, {
@@ -423,5 +467,15 @@ registry.register("repo_scan", repo_scan, {
 
 registry.register("reflect_self", reflect_self, {
     "description": "Summarise recent memory and suggest self-improvements",
+    "parameters": {"type": "object", "properties": {}}
+})
+
+registry.register("agent_identity", agent_identity, {
+    "description": "Describe the agent using memory and docs",
+    "parameters": {"type": "object", "properties": {}}
+})
+
+registry.register("build_memory_map", build_memory_map_tool, {
+    "description": "Generate memory cluster map JSON",
     "parameters": {"type": "object", "properties": {}}
 })

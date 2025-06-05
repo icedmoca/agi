@@ -1358,6 +1358,20 @@ class Agent:
                 )
                 if task.status == "error":
                     self._queue_auto_evolution(task)
+
+                self.task_counter += 1
+                if self.task_counter >= 10:
+                    self.task_counter = 0
+                    try:
+                        from core.tools.tool_registry import reflect_self
+                        reflection = reflect_self()
+                        if reflection.get("status") == "success":
+                            new_goal = reflection["output"].splitlines()[-1]
+                            injected = self.create_task(new_goal)
+                            with open(TASKS_FILE, "a") as f:
+                                f.write(json.dumps(injected.to_dict()) + "\n")
+                    except Exception as e:
+                        logger.error(f"Scheduled reflection failed: {e}")
             except Exception:
                 # Never allow memory failures to crash the agent
                 pass

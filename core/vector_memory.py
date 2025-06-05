@@ -1,9 +1,13 @@
+from __future__ import annotations
 try:
     from sentence_transformers import SentenceTransformer
 except Exception:  # pragma: no cover - optional dependency
     SentenceTransformer = None
 import faiss
-import numpy as np
+try:
+    import numpy as np
+except Exception:  # pragma: no cover - optional dependency
+    np = None  # type: ignore
 import os
 from datetime import datetime
 from typing import List, Optional, Dict
@@ -28,11 +32,11 @@ class Vectorizer:
                 logger.error(f"Failed to initialize SentenceTransformer: {e}")
                 self.model = None
 
-    def embed(self, text: str) -> np.ndarray:
+    def embed(self, text: str):
         """Generate embedding for a single text"""
-        if not self.model:
+        if not self.model or np is None:
             # very small fallback embedding using bag-of-words length
-            return np.array([len(text)])
+            return [len(text)]
         return self.model.encode(text, convert_to_tensor=False, normalize_embeddings=True)
 
     def find_similar(self, query: str, entries: List[Dict], top_k: int = 3) -> List[Dict]:
@@ -54,6 +58,9 @@ class Vectorizer:
                     scored.append((score, e))
                 scored.sort(key=lambda x: x[0], reverse=True)
                 return [e for s, e in scored[:top_k] if s > 0]
+
+            if np is None:
+                return []
 
             # Get embeddings for all entries
             entry_texts = [f"{e['goal']} {e.get('result', '')}" for e in entries]
@@ -194,6 +201,9 @@ class VectorMemory:
             return []
             
         # Calculate cosine similarities
+        if np is None:
+            return []
+
         similarities = np.dot(self.vectors, query_vector)
         
         # Get top matches above threshold

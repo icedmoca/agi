@@ -12,7 +12,10 @@ try:
     from core.vector_memory import Vectorizer
 except Exception:
     Vectorizer = None
-import numpy as np
+try:
+    import numpy as np
+except Exception:  # pragma: no cover - optional dependency
+    np = None  # type: ignore
 
 class Memory:
     """
@@ -165,10 +168,11 @@ class Memory:
         """
         Convert numpy types / arrays into plain Python so json.dumps works.
         """
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        if isinstance(obj, (np.floating, np.integer)):
-            return obj.item()
+        if np is not None:
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            if isinstance(obj, (np.floating, np.integer)):
+                return obj.item()
         if isinstance(obj, dict):
             return {k: self._json_safe(v) for k, v in obj.items()}
         if isinstance(obj, list):

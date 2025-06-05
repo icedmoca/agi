@@ -1,4 +1,7 @@
-import requests
+try:
+    import requests
+except Exception:  # pragma: no cover - optional dependency
+    requests = None
 import json
 import subprocess
 from pathlib import Path
@@ -138,6 +141,8 @@ class DataFetcher:
         method = plan.get("method")
         
         if method == "api":
+            if requests is None:
+                return {"type": "error", "error": "requests unavailable", "source": plan.get("url")}
             try:
                 response = requests.get(plan["url"], params=plan.get("params"))
                 response.raise_for_status()  # Raise for 4XX/5XX errors
