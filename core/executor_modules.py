@@ -2,6 +2,7 @@
 
 import subprocess
 from core.executor import is_valid_shell_command
+from core.intent_classifier import classify_intent
 from pathlib import Path
 from typing import Optional
 
@@ -12,19 +13,35 @@ class ExecutorsModule:
     def run_shell_command(command: str) -> str:
         """Run a shell command and return the output or error"""
         try:
-            if not is_valid_shell_command(command):
-                return "[ERROR] Rejected non-shell command"
-            result = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=20
-            )
-            if result.returncode == 0:
-                return result.stdout.strip()
-            else:
-                return f"[stderr] {result.stderr.strip()}"
+            outputs = []
+            executed = 0
+            skipped = 0
+            for line in command.splitlines():
+                if not line.strip():
+                    continue
+                cls = classify_intent(line)
+                ctype = cls.get("type", "other")
+                cleaned = cls.get("value", line).strip()
+                if ctype != "command":
+                    skipped += 1
+                    continue
+                if not is_valid_shell_command(cleaned):
+                    skipped += 1
+                    continue
+                result = subprocess.run(
+                    cleaned,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=20
+                )
+                executed += 1
+                if result.returncode != 0:
+                    return f"[stderr] {result.stderr.strip()}"
+                outputs.append(result.stdout.strip())
+            if executed == 0:
+                return "[SKIPPED]"
+            return "\n".join(filter(None, outputs))
         except Exception as e:
             return f"[ERROR] {str(e)}"
 

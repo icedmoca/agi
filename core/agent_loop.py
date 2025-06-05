@@ -19,6 +19,7 @@ from core import planner, evolver
 from core.memory import Memory
 from core.audit import AuditLogger
 from core.executor import Executor, is_valid_shell_command
+from core.intent_classifier import classify_intent
 from core.goal_gen import GoalGenerator
 from core.goal_router import GoalRouter
 from core.utils import suggest_tags
@@ -1011,30 +1012,51 @@ class Agent:
     def run_shell(self, command: str, timeout: int = 5, **kwargs) -> dict:
         """Execute a shell command with timeout and return structured output"""
         try:
-            # Remove timeout from kwargs if present to avoid duplicate parameter
             kwargs.pop('timeout', None)
 
-            if not is_valid_shell_command(command):
-                logger.warning("Skipped invalid shell command: %s", command)
-                return {
-                    "status": "error",
-                    "output": "Rejected non-shell command",
-                    "returncode": -1,
-                }
+            outputs = []
+            executed = 0
+            skipped = 0
 
-            result = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                **kwargs
-            )
-            
+            for line in command.splitlines():
+                if not line.strip():
+                    continue
+                cls = classify_intent(line)
+                ctype = cls.get("type", "other")
+                cleaned = cls.get("value", line).strip()
+                if ctype != "command":
+                    logger.warning("Skipped non-command: %s - %s", ctype, cleaned)
+                    skipped += 1
+                    continue
+                if not is_valid_shell_command(cleaned):
+                    logger.warning("Skipped invalid shell command: %s", cleaned)
+                    skipped += 1
+                    continue
+
+                result = subprocess.run(
+                    cleaned,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    **kwargs
+                )
+
+                if result.returncode != 0:
+                    return {
+                        "status": "error",
+                        "output": result.stdout + result.stderr,
+                        "returncode": result.returncode,
+                    }
+                executed += 1
+                outputs.append(result.stdout + result.stderr)
+
+            logger.debug("Executed %d commands, skipped %d", executed, skipped)
+
             return {
-                "status": "success" if result.returncode == 0 else "error",
-                "output": result.stdout + result.stderr,
-                "returncode": result.returncode
+                "status": "success" if executed else "skipped",
+                "output": "\n".join(filter(None, outputs)) or "[SUCCESS] No output",
+                "returncode": 0,
             }
         except subprocess.TimeoutExpired:
             return {
