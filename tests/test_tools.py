@@ -23,9 +23,7 @@ from core.tools.tool_registry import (
     get_system_metrics,
     repo_scan,
     run_shell,
-
-
-
+)
 def test_file_read(tmp_path):
     f = tmp_path / "hello.txt"
     f.write_text("hello")

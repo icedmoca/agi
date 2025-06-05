@@ -837,11 +837,21 @@ def chat_with_llm(
 def safe_apply_evolution(file_path: str, new_code: str, goal: str, memory: Memory) -> dict:
     """Safely apply evolved code with backups and logging"""
     cleaned = sanitize_llm_output(new_code)
+
+    # Ensure generated code is syntactically valid before writing anything
     try:
         ast.parse(cleaned)
     except Exception as e:
         return {"status": "error", "output": f"Invalid syntax: {e}"}
 
+    # Read the current file contents and create a backup
+    original = Path(file_path).read_text()
+    backup = backup_file(file_path)
+
+    # Write the new code to disk
+    Path(file_path).write_text(cleaned)
+
+    # Produce a unified diff for logging and memory
     diff = "\n".join(
         difflib.unified_diff(
             original.splitlines(),
@@ -851,6 +861,7 @@ def safe_apply_evolution(file_path: str, new_code: str, goal: str, memory: Memor
         )
     )
 
+    log_line = f"{datetime.now().isoformat()} {file_path} {goal}\n{diff}\n"
     Path("evolution_log.md").open("a").write(log_line)
 
     memory.append(
