@@ -2,6 +2,7 @@
 
 import subprocess
 import shlex
+from core.executor import is_likely_shell_command
 from pathlib import Path
 from typing import Optional
 
@@ -12,6 +13,8 @@ class ExecutorsModule:
     def run_shell_command(command: str) -> str:
         """Run a shell command and return the output or error"""
         try:
+            if not is_likely_shell_command(command):
+                return "[ERROR] Rejected non-shell command"
             result = subprocess.run(
                 shlex.split(command),
                 capture_output=True,
@@ -53,3 +56,4 @@ class ExecutorsModule:
             return "\n".join(entries)
         except Exception as e:
             return f"[ERROR] {str(e)}"
+
