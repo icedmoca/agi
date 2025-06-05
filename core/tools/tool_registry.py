@@ -105,6 +105,7 @@ class ToolRegistry:
         """Execute a registered tool with retry and logging."""
         import time
         from core.memory import Memory
+        from core.reward import score_result
 
         tool_fn = self.tools[name]
         delay = 0.5
@@ -124,6 +125,7 @@ class ToolRegistry:
                 else:
                     return result
             finally:
+                score = score_result(str(result.get("output")))
                 trace = {
                     "timestamp": datetime.now().isoformat(),
                     "tool": name,
@@ -132,14 +134,24 @@ class ToolRegistry:
                     "attempt": attempt,
                     "duration": (datetime.now() - start).total_seconds(),
                     "output": result.get("output"),
+                    "score": score,
                 }
                 _log_tool_trace(trace)
                 mem = Memory.latest()
                 if mem:
+                    meta = {
+                        "type": "tool_use",
+                        "args": args,
+                        "status": status,
+                        "task_id": args.get("task_id"),
+                        "tags": args.get("tags"),
+                        "file_target": args.get("file_target") or args.get("file_path") or args.get("path"),
+                    }
                     mem.append(
                         goal=f"tool:{name}",
                         result=str(result.get("output")),
-                        metadata={"type": "tool_use", "args": args, "status": status},
+                        score=score,
+                        metadata=meta,
                     )
 
 # Initialize global registry
@@ -229,6 +241,21 @@ def internet_fetch(url: str) -> dict:
         return {"status": "success", "output": resp.text}
     except Exception as e:
         return {"status": "error", "output": str(e)}
+
+@log_tool_call
+def fetch_url(url: str) -> dict:
+    """Alias for internet_fetch for compatibility"""
+    return internet_fetch(url)
+
+@log_tool_call
+def read_file(path: str) -> dict:
+    """Alias for file_read for compatibility"""
+    return file_read(path)
+
+@log_tool_call
+def get_system_metrics() -> dict:
+    """Alias for os_metrics"""
+    return os_metrics()
 
 @log_tool_call
 def os_metrics() -> dict:
@@ -333,6 +360,29 @@ registry.register("internet_fetch", internet_fetch, {
         },
         "required": ["url"]
     }
+})
+
+registry.register("fetch_url", fetch_url, {
+    "description": "Fetch content from a URL",
+    "parameters": {
+        "type": "object",
+        "properties": {"url": {"type": "string", "description": "URL"}},
+        "required": ["url"]
+    }
+})
+
+registry.register("read_file", read_file, {
+    "description": "Read a text file",
+    "parameters": {
+        "type": "object",
+        "properties": {"path": {"type": "string", "description": "File path"}},
+        "required": ["path"]
+    }
+})
+
+registry.register("get_system_metrics", get_system_metrics, {
+    "description": "Retrieve basic OS metrics",
+    "parameters": {"type": "object", "properties": {}}
 })
 
 registry.register("os_metrics", os_metrics, {
