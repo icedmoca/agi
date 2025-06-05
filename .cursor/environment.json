@@ -1,0 +1,13 @@
+{
+  "snapshot": "default",
+  "user": "ubuntu",
+  "install": "pip install -r requirements.txt || true",
+  "start": "",
+  "terminals": [
+    {
+      "name": "agi",
+      "command": "python main.py --interactive",
+      "description": "Starts AGI loop"
+    }
+  ]
+}
