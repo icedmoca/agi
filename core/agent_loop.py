@@ -1385,18 +1385,22 @@ class Agent:
 
             # --- CHAT -------------------------------------------------- #
             if task.type == "chat":
-                # Use the real LLM wrapper (local import keeps startup fast)
-                from core.evolver import chat_with_llm
+                # Use the *safe* chat wrapper that **does not** execute shell
+                # commands.  We also instruct the model to answer in
+                # markdown so it can be rendered nicely by clients.
+                from core.chat import chat_with_llm  # local import keeps startup fast
 
-                reply = chat_with_llm(
-                    system_prompt=None,          # add a system prompt if you like
+                result = chat_with_llm(
+                    system_prompt="You are a helpful assistant.",
                     user_input=task.goal,
-                    memory=self.memory,
+                    format="markdown",          # ensure no raw shell code
+                    model="mistral-hacker",
                 )
 
-                norm        = self._normalize_result(reply)
-                task.status = norm["status"]
-                task.result = norm["output"]
+                print(result)  # Just print – skip any live-execution
+                task.result = result
+                task.status = "success"
+                return task  # short-circuit – no further processing
 
             # --- CODE-EVOLUTION --------------------------------------- #
             elif task.type == "evolve":
