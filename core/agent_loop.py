@@ -887,14 +887,16 @@ class Agent:
                 # Fetch batch of pending tasks
                 pending_tasks = self.get_pending_tasks(limit=BATCH_SIZE)
                 if not pending_tasks:
-                    logger.info("No pending tasks found")
-                    time.sleep(SLEEP_INTERVAL)
-                    continue
+                    from core.goal_gen import GoalGenerator
+                    logger.info("Queue empty – generating internal goal")
+                    goal_gen = GoalGenerator()
+                    new_goal = goal_gen.generate_internal_goal()
+                    pending_tasks = [new_goal]
+                else:
+                    # Group into clusters
+                    clusters = self.orchestrator.cluster_tasks(pending_tasks)
+                    logger.info(f"Grouped {len(pending_tasks)} tasks into {len(clusters)} clusters")
                     
-                # Group into clusters
-                clusters = self.orchestrator.cluster_tasks(pending_tasks)
-                logger.info(f"Grouped {len(pending_tasks)} tasks into {len(clusters)} clusters")
-                
                 for i, cluster in enumerate(clusters):
                     logger.info(f"Processing cluster {i+1}/{len(clusters)} with {len(cluster)} tasks")
                     
@@ -935,10 +937,13 @@ class Agent:
                     self._save_state(status="halted")
                     break
 
-                time.sleep(SLEEP_INTERVAL)
+                # Adaptive back-off: many tasks → short sleep, else longer
+                pending_left = len(self.get_pending_tasks(limit=1))
+                sleep_time = 2 if pending_left else SLEEP_INTERVAL
+                time.sleep(sleep_time)
 
             else:
-                # successful iteration resets crash counter
+                # successful iteration resets crash counter and shorten sleep
                 if self.consecutive_crashes:
                     self.consecutive_crashes = 0
                     self._save_state()

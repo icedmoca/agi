@@ -243,4 +243,41 @@ class GoalGenerator:
         return Goal(
             goal_type=goal_type,
             description=f"{goal_type}: {context}"
-        ) 
+        )
+
+    # ------------------------------------------------------------------ #
+    # Lightweight helper used by Agent for on-the-fly goal creation
+    # ------------------------------------------------------------------ #
+
+    def generate_internal_goal(self) -> Dict[str, Any]:
+        """Return a single high-priority goal derived from recent memory.
+
+        If no strong signal is found, produce a generic self-improvement
+        goal referencing an unused improvement type.
+        """
+        # Analyse latest 100 memory entries for failures
+        failures = [e for e in self.memory.entries[-100:] if e.score < 0]
+        if failures:
+            worst = min(failures, key=lambda e: e.score)
+            goal_txt = f"Improve robustness: {worst.goal[:60]}"
+        else:
+            goal_txt = random.choice(self.improvement_types)
+
+        goal_dict = {
+            "id": f"internal_{int(time.time()*1000)}",
+            "type": "evolution",
+            "goal": goal_txt,
+            "priority": 3,
+            "metadata": {
+                "origin": "self",
+                "generated_by": "goal_generator",
+            },
+            "created": datetime.now().isoformat(),
+            "status": "pending",
+        }
+
+        # Persist to tasks file so that dashboard sees it
+        with self.tasks_file.open("a") as fp:
+            fp.write(json.dumps(goal_dict) + "\n")
+
+        return goal_dict 

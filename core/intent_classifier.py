@@ -1,9 +1,11 @@
 import json
 import logging
 import re
-from typing import Dict
+from typing import Dict, Any
+from enum import Enum
 
 from .chat import chat_with_llm
+from core.memory import Memory
 
 logger = logging.getLogger(__name__)
 
@@ -25,40 +27,49 @@ _CLASSIFY_PROMPT = (
     " other. Respond ONLY with JSON like {\"type\": \"command\"}."
 )
 
+# Keep a local enum fallback to avoid circular import during type-checking
+class _TaskType(str, Enum):
+    CHAT = "chat"
+    COMMAND = "command"
+    TOOL = "tool"
+    EVOLUTION = "evolution"
+    REFLECTION = "reflection"
+    FETCH = "fetch"
+    MEMORY_QUERY = "memory_query"
 
-def classify_intent(text: str) -> Dict[str, str]:
-    """Return a structured intent classification for the given text."""
-    text = (text or "").strip()
-    if not text:
-        return {"type": "other", "value": ""}
+def _keyword_detect(goal: str) -> _TaskType:
+    g = goal.lower()
+    if any(k in g for k in ("fix", "refactor", "evolve", "modify")):
+        return _TaskType.EVOLUTION
+    if any(k in g for k in ("list", "show", "run", "execute")) and len(g.split()) <= 7:
+        return _TaskType.COMMAND
+    if any(k in g for k in ("push", "commit", "search", "fetch", "download")):
+        return _TaskType.TOOL
+    if "weather" in g or "stock" in g or g.endswith("?"):
+        return _TaskType.FETCH
+    if "who are you" in g or "describe" in g:
+        return _TaskType.CHAT
+    return _TaskType.CHAT
 
-    lowered = text.lower()
-    for pat in _INTERACTIVE_PATTERNS:
-        if re.search(pat, lowered):
-            return {"type": "interactive", "value": text, "reason": "Blocks on user input"}
+def classify_intent(text: str) -> Dict[str, Any]:
+    """Heuristic + memory-driven intent classifier."""
+    base_type = _keyword_detect(text)
 
-    try:
-        response = chat_with_llm(
-            user_input=f"Text:\n{text}",
-            system_prompt=_CLASSIFY_PROMPT,
-            format="json",
-            retry_on_invalid=True,
-        )
-        data = json.loads(response)
-        if isinstance(data, dict) and data.get("type"):
-            intent_type = str(data.get("type", "other")).lower()
-            value = (data.get("value") or text).strip()
-            return {"type": intent_type, "value": value}
-    except Exception as e:
-        logger.error("LLM classification failed: %s", e)
+    # Memory similarity override
+    mem = Memory.latest()
+    if mem:
+        similar = mem.find_similar(text, top_k=3)
+        for entry in similar:
+            t = entry.get("metadata", {}).get("type")
+            if t in _TaskType.__members__:
+                base_type = _TaskType(t)
+                break
 
-    try:
-        from .executor import is_valid_shell_command
-        intent_type = "command" if is_valid_shell_command(text) else "other"
-    except Exception:
-        intent_type = "other"
-    return {"type": intent_type, "value": text}
+    # Punctuation heuristic
+    if text.strip().endswith("?"):
+        base_type = _TaskType.CHAT
 
+    return {"type": base_type.value, "value": text, "confidence": 0.8}
 
 def classify_llm_output(text: str) -> Dict[str, str]:
     """Backwards compatibility wrapper around :func:`classify_intent`."""

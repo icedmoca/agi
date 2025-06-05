@@ -109,6 +109,17 @@ class Memory:
         self._save()
         return removed
 
+    def get_recent_context(self, goal: str, k: int = 3):
+        """Return last k similar goals and their metadata"""
+        similar = self.find_similar(goal, top_k=k)
+        return [
+            {
+                "goal": e.get("goal"),
+                "metadata": e.get("metadata", {})
+            }
+            for e in similar
+        ]
+
     # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #

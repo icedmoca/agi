@@ -100,6 +100,20 @@ def _serve(port: int = 8000) -> None:
         state_path.write_text(json.dumps(state))
         return {"status": "stopped"}
 
+    # intent test
+    from core.intent_classifier import classify_intent as _ci
+
+    @app.post("/intent")
+    def intent(payload: dict):  # type: ignore
+        goal = payload.get("goal", "")
+        return _ci(goal)
+
+    @app.post("/simulate")
+    def simulate(payload: dict):  # type: ignore
+        goal = payload.get("goal", "")
+        from core.intent_classifier import classify_intent as ci
+        return {"intent": ci(goal), "plan": "simulation placeholder"}
+
     uvicorn.run(app, host="0.0.0.0", port=port)
 
 

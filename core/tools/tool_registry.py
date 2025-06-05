@@ -76,6 +76,14 @@ def _normalize_result(r):
     # if we arrive here we have a str
     return {"status": "success", "output": r}
 
+def risk_score(name: str, args: dict) -> str:
+    high_risk = {"run_shell", "git_push", "evolve_file"}
+    if name in high_risk:
+        return "high"
+    if name in {"git_commit", "heal_system"}:
+        return "medium"
+    return "low"
+
 class ToolRegistry:
     def __init__(self):
         self.tools: Dict[str, Callable] = {}
@@ -121,6 +129,12 @@ class ToolRegistry:
 
         tool_fn = self.tools[name]
         delay = 0.5
+        risk = risk_score(name, args)
+
+        # backup on high-risk actions
+        if risk == "high":
+            _log_tool_trace({"timestamp": datetime.now().isoformat(), "tool": name, "risk": "high", "stage": "pre-exec"})
+
         for attempt in range(max_retries + 1):
             start = datetime.now()
             try:
@@ -138,6 +152,9 @@ class ToolRegistry:
                     return result
             finally:
                 score = score_result(str(result.get("output")))
+                if risk == "high":
+                    # after success mark risk satisfied
+                    _log_tool_trace({"timestamp": datetime.now().isoformat(), "tool": name, "risk": "high", "stage": "post-exec"})
                 trace = {
                     "timestamp": datetime.now().isoformat(),
                     "tool": name,
