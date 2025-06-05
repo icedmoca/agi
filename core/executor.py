@@ -9,7 +9,7 @@ import ollama
 import pathlib
 import re
 import numpy as np
-from typing import Tuple, Optional, List, Dict, Any
+from typing import Tuple, Optional, List, Dict, Any, Union
 from logging import getLogger, Formatter, ERROR, INFO, StreamHandler
 from faiss import IndexFlatL2
 from hashlib import sha256
@@ -17,17 +17,52 @@ import logging
 from pathlib import Path
 import shlex
 
-# Simple heuristic to further validate potential shell commands
+# --- Shell command validation helpers ------------------------------------
+
+VALID_PREFIXES = {
+    "cd", "ls", "echo", "cat", "touch", "mkdir", "rm", "python", "pip",
+    "grep", "find", "pwd", "cp", "mv", "pytest", "git", "sed", "awk",
+    "head", "tail", "du", "df", "chmod", "chown", "for", "while", "curl",
+    "wget",
+}
+
+
+def is_valid_shell_command(cmd: str) -> bool:
+    """Return True if the string looks like a real shell command."""
+    cmd = cmd.strip()
+    if not cmd:
+        return False
+
+    # Obvious natural language lines like "And then run" or "Make sure".
+    if re.match(r"^[A-Za-z][A-Za-z\s]{3,}$", cmd) and not re.search(r"[;&|$]", cmd):
+        return False
+
+    try:
+        tokens = shlex.split(cmd)
+    except ValueError:
+        return False
+
+    if not tokens:
+        return False
+
+    first = tokens[0]
+    if first.startswith(('./', '/')) or first.endswith('.sh'):
+        return True
+
+    first_l = first.lower()
+    if first_l in VALID_PREFIXES:
+        return True
+
+    # Allow simple control structures
+    if first_l in {"if", "for", "while"}:
+        return True
+
+    return False
+
+
 def is_likely_shell_command(cmd: str) -> bool:
-    """Filter out plain English or garbage LLM text."""
-    shell_keywords = [
-        "echo", "cd", "ls", "cat", "touch", "mkdir",
-        "rm", "python", "pip", "for", "while"
-    ]
-    return (
-        any(cmd.strip().startswith(k) for k in shell_keywords)
-        and not re.search(r"[a-zA-Z]{5,}.*\s[a-zA-Z]{5,}", cmd)
-    )
+    """Backward compatible alias for is_valid_shell_command."""
+    return is_valid_shell_command(cmd)
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -48,20 +83,12 @@ class Executor:
             "cd", "ls", "echo", "cat", "grep", "find", "pwd", "touch",
             "mkdir", "rm", "cp", "mv", "python", "pytest", "pip", "git",
             "sed", "awk", "head", "tail", "du", "df", "chmod", "chown",
+            "for", "while", "if", "bash", "sh", "curl", "wget",
         }
 
     def _is_shell_command(self, command: str) -> bool:
         """Simple heuristic to determine if text looks like a shell command"""
-        try:
-            tokens = shlex.split(command)
-        except ValueError:
-            return False
-        if not tokens:
-            return False
-        first = tokens[0].lower()
-        if first.startswith(('./', '/')) or first.endswith('.sh'):
-            return True
-        return first in self.valid_prefixes and is_likely_shell_command(command)
+        return is_valid_shell_command(command)
         
     def run_command(self, command: str) -> Tuple[int, str, str]:
         """Execute a shell command and return (returncode, stdout, stderr)"""
@@ -71,7 +98,7 @@ class Executor:
             if command.startswith('$'):
                 command = command[1:].strip()
 
-            if not self._is_shell_command(command) or not is_likely_shell_command(command):
+            if not is_valid_shell_command(command):
                 logger.warning("Skipped invalid shell command: %s", command)
                 return 1, "", "Rejected non-shell command"
 
@@ -151,14 +178,16 @@ class Executor:
         vectors_array = np.array(self.vectors).astype('float32')
         self.index.add(vectors_array)
 
-    def run_and_capture(self, cmd: List[str], **kwargs) -> subprocess.CompletedProcess:
+    def run_and_capture(self, cmd: Union[List[str], str], **kwargs) -> subprocess.CompletedProcess:
         """Run a command and capture output safely"""
         try:
-            if not cmd or not self._is_shell_command(cmd[0]) or not is_likely_shell_command(' '.join(cmd)):
+            shell_cmd = cmd if isinstance(cmd, str) else ' '.join(cmd)
+            if not shell_cmd or not is_valid_shell_command(shell_cmd):
                 return subprocess.CompletedProcess(cmd, -1, stdout="", stderr="[ERROR] Rejected non-shell command")
 
             result = subprocess.run(
                 cmd,
+                shell=isinstance(cmd, str),
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -180,7 +209,7 @@ class Executor:
             # Sanitize command
             command = self.sanitize_command(goal_description)
 
-            if not self._is_shell_command(command):
+            if not is_valid_shell_command(command):
                 LOGGER.warning("Rejected non-shell command: %s", command)
                 return "[ERROR] Rejected non-shell command"
 
@@ -190,7 +219,7 @@ class Executor:
                     
             # Execute normal command
             result = self.run_and_capture(
-                command.split(),
+                command,
                 cwd=self.working_dir
             )
             
@@ -309,7 +338,7 @@ def execute_action(command: str) -> str:
         # Sanitize command for safety
         command = re.sub(r'[`;&|]', '', command).strip()
 
-        if not Executor()._is_shell_command(command) or not is_likely_shell_command(command):
+        if not is_valid_shell_command(command):
             LOGGER.warning("Skipped invalid shell command: %s", command)
             return "[ERROR] Rejected non-shell command"
         

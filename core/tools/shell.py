@@ -1,9 +1,13 @@
-from core.executor import is_likely_shell_command
+from core.executor import is_valid_shell_command
+import logging
+
+logger = logging.getLogger(__name__)
 
 def run_shell(command: str) -> dict:
     """Execute a shell command and return standardized output"""
     try:
-        if not is_likely_shell_command(command):
+        if not is_valid_shell_command(command):
+            logger.warning("Skipped invalid shell command: %s", command)
             return {"status": "error", "output": "Rejected non-shell command", "returncode": -1}
         import subprocess
         result = subprocess.run(

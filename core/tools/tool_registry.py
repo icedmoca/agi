@@ -176,14 +176,14 @@ def run_shell(command: str, timeout: int = 60, **kwargs) -> dict:
     Execute a shell command safely and always return a dictionary.
     """
     try:
-        from core.executor import Executor, is_likely_shell_command
+        from core.executor import Executor, is_valid_shell_command
         exec_ = Executor()
-        if not is_likely_shell_command(command):
+        if not is_valid_shell_command(command):
             logger.warning("Skipped invalid shell command: %s", command)
             return {"status": "error", "output": "Rejected non-shell command"}
         # Remove timeout from kwargs since we're passing it explicitly
         kwargs.pop('timeout', None)
-        proc = exec_.run_and_capture(command.split(), timeout=timeout)
+        proc = exec_.run_and_capture(command, timeout=timeout)
         
         # Always return a properly formatted dictionary
         if isinstance(proc, str):
