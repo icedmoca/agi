@@ -18,7 +18,7 @@ import asyncio
 from core import planner, evolver
 from core.memory import Memory
 from core.audit import AuditLogger
-from core.executor import Executor, is_likely_shell_command
+from core.executor import Executor, is_valid_shell_command
 from core.goal_gen import GoalGenerator
 from core.goal_router import GoalRouter
 from core.utils import suggest_tags
@@ -1014,7 +1014,7 @@ class Agent:
             # Remove timeout from kwargs if present to avoid duplicate parameter
             kwargs.pop('timeout', None)
 
-            if not is_likely_shell_command(command):
+            if not is_valid_shell_command(command):
                 logger.warning("Skipped invalid shell command: %s", command)
                 return {
                     "status": "error",
