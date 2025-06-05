@@ -1,5 +1,8 @@
 import random
-import ollama
+try:
+    import ollama  # pragma: no cover
+except Exception:  # pragma: no cover
+    ollama = None
 import json
 from datetime import datetime
 from pathlib import Path
@@ -291,6 +294,8 @@ def sanitize_llm_output(raw: str) -> str:
     code = raw
     if code.startswith("```python") or code.startswith("```language=python"):
         code = code.split("```", 1)[-1]
+        if code.startswith("python"):
+            code = code.split("\n", 1)[-1]
     if "```" in code:
         code = code.rsplit("```", 1)[0]
     
@@ -827,3 +832,39 @@ def chat_with_llm(
         logging.error(f"LLM call failed: {exc}")
         reply = f"[ERROR] LLM call failed: {exc}"
         return reply
+
+
+def safe_apply_evolution(file_path: str, new_code: str, goal: str, memory: Memory) -> dict:
+    """Safely apply evolved code with backups and logging"""
+    cleaned = sanitize_llm_output(new_code)
+    try:
+        ast.parse(cleaned)
+    except Exception as e:
+        return {"status": "error", "output": f"Invalid syntax: {e}"}
+
+    original = Path(file_path).read_text()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup = Path(f"{file_path}.{timestamp}.bak")
+    shutil.copy(file_path, backup)
+
+    Path(file_path).write_text(cleaned)
+
+    diff = "\n".join(
+        difflib.unified_diff(
+            original.splitlines(),
+            cleaned.splitlines(),
+            fromfile="before",
+            tofile="after",
+        )
+    )
+
+    log_line = f"{datetime.now().isoformat()} | {file_path} | {goal} | diff_size:{len(diff.splitlines())}\n"
+    Path("evolution_log.md").open("a").write(log_line)
+
+    memory.append(
+        goal=f"evolve:{file_path}",
+        result="[SUCCESS] evolution applied",
+        metadata={"diff": diff, "backup": str(backup)},
+    )
+
+    return {"status": "success", "output": "applied", "diff": diff}

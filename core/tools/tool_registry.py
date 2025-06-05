@@ -105,6 +105,7 @@ class ToolRegistry:
         """Execute a registered tool with retry and logging."""
         import time
         from core.memory import Memory
+        from core.reward import score_result
 
         tool_fn = self.tools[name]
         delay = 0.5
@@ -124,6 +125,7 @@ class ToolRegistry:
                 else:
                     return result
             finally:
+                score = score_result(str(result.get("output")))
                 trace = {
                     "timestamp": datetime.now().isoformat(),
                     "tool": name,
@@ -132,14 +134,24 @@ class ToolRegistry:
                     "attempt": attempt,
                     "duration": (datetime.now() - start).total_seconds(),
                     "output": result.get("output"),
+                    "score": score,
                 }
                 _log_tool_trace(trace)
                 mem = Memory.latest()
                 if mem:
+                    meta = {
+                        "type": "tool_use",
+                        "args": args,
+                        "status": status,
+                        "task_id": args.get("task_id"),
+                        "tags": args.get("tags"),
+                        "file_target": args.get("file_target") or args.get("file_path") or args.get("path"),
+                    }
                     mem.append(
                         goal=f"tool:{name}",
                         result=str(result.get("output")),
-                        metadata={"type": "tool_use", "args": args, "status": status},
+                        score=score,
+                        metadata=meta,
                     )
 
 # Initialize global registry
