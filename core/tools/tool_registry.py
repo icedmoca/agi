@@ -231,6 +231,21 @@ def internet_fetch(url: str) -> dict:
         return {"status": "error", "output": str(e)}
 
 @log_tool_call
+def fetch_url(url: str) -> dict:
+    """Alias for internet_fetch for compatibility"""
+    return internet_fetch(url)
+
+@log_tool_call
+def read_file(path: str) -> dict:
+    """Alias for file_read for compatibility"""
+    return file_read(path)
+
+@log_tool_call
+def get_system_metrics() -> dict:
+    """Alias for os_metrics"""
+    return os_metrics()
+
+@log_tool_call
 def os_metrics() -> dict:
     """Return basic OS telemetry"""
     from core.tools.fetcher import SystemFetcher
@@ -333,6 +348,29 @@ registry.register("internet_fetch", internet_fetch, {
         },
         "required": ["url"]
     }
+})
+
+registry.register("fetch_url", fetch_url, {
+    "description": "Fetch content from a URL",
+    "parameters": {
+        "type": "object",
+        "properties": {"url": {"type": "string", "description": "URL"}},
+        "required": ["url"]
+    }
+})
+
+registry.register("read_file", read_file, {
+    "description": "Read a text file",
+    "parameters": {
+        "type": "object",
+        "properties": {"path": {"type": "string", "description": "File path"}},
+        "required": ["path"]
+    }
+})
+
+registry.register("get_system_metrics", get_system_metrics, {
+    "description": "Retrieve basic OS metrics",
+    "parameters": {"type": "object", "properties": {}}
 })
 
 registry.register("os_metrics", os_metrics, {
