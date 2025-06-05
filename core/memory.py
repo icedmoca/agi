@@ -34,9 +34,13 @@ class Memory:
         # locate a Memory object even when one is not passed explicitly.
         Memory._latest = self                        # ←  store singleton
 
-        self.entries: List[MemoryEntry] = self._load()
+        # Load persisted entries; `_load()` returns a tuple
+        #     (<entries>, <was_file_modified>)
+        self.entries, changed = self._load()
+
+        # Persist back only if we actually changed the on-disk data
         if changed:
-            self._save()                # rewrite file so tests can verify
+            self._save()
 
     # A very small singleton helper (used by SelfHealer)
     _latest: ClassVar[Optional["Memory"]] = None

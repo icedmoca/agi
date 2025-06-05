@@ -26,11 +26,12 @@ from core.reflection import ReflectionAgent
 from core.vector_memory import VectorMemory
 from core.memory import Memory
 from core.vector_memory import get_vectorizer
-from core.agent_loop import Agent
+from core.agent_loop import Agent, process_task
 from core.audit import AuditLogger
 from core.task_sanitizer import TaskSanitizer
 from core.goal_gen import Goal, GoalGenerator
 from core.tools.fetcher import SystemFetcher
+from core.models import Task
 
 # Configure logging
 logging.basicConfig(
@@ -432,23 +433,18 @@ def interactive_mode(agent: Agent):
                 print("  exit     - Exit the shell\n")
                 continue
                 
-            # Create task with proper metadata
-            task = {
-                "id": f"task_{int(time.time())}",
-                "type": "interactive",
-                "goal": user_input,
-                "priority": 0,
-                "status": "pending",
-                "created": datetime.now().isoformat(),
-                "metadata": {
-                    "type": "chat",
-                    "interactive": True,
-                }
-            }
-            
-            # Process task and handle response
-            status, result = agent.process_task(task)
-            print(f"\n{result}\n")
+            # Instantiate a real Task object
+            task = Task(
+                id=f"task_{int(time.time())}",
+                type="interactive",
+                goal=user_input,
+                priority=0,
+                metadata={"type": "chat", "interactive": True},
+            )
+
+            # Dispatch and receive the populated Task back
+            task = agent.process_task(task)
+            print(f"\n{task.result}\n")
             
         except KeyboardInterrupt:
             print("\n👋 Goodbye!")
@@ -541,7 +537,16 @@ def main():
         
         # Run in interactive mode if requested
         if args.interactive:
-            interactive_mode(agent)
+            while True:
+                goal = input("🤖  Goal > ").strip()
+                if not goal:
+                    continue
+                if goal.lower() in {"exit", "quit"}:
+                    break
+
+                task = Task(id=str(time.time_ns()), type="chat", goal=goal)
+                updated = process_task(task)
+                print(updated.result)
             return
             
         # Main monitoring loop

@@ -1,0 +1,48 @@
+# Virtual environment
+agi_env/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logs and output files
+*.log
+app.log
+output/
+backedup/
+results.txt
+output_file
+
+# Memory and cache files
+memory.json
+memory.jsonl
+memory_backup.json
+model_cache/
+vector_memory/
+
+# Hash and tracking files
+hashes.txt
+trusted_hashes.txt
+trusted_hashes_backup.txt
+backedup_hashes.txt
+
+# API keys and sensitive files
+api_keys.secure
+api_keys.txt
+api_keys_fixed.txt
+api_keys_recurse.txt
+
+# Task and execution files
+tasks.jsonl
+*.faiss
+
+# Temporary files
+hex_string.txt
+dxg_count.txt
+dxg_count_mod.txt
+images.list
+log_locations.txt
+chat_llm_calls.txt
+

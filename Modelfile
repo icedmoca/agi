@@ -1,0 +1,11 @@
+FROM mistral
+
+# High-level instruction to shape agent behavior
+SYSTEM "You are an autonomous AGI assistant with full access to a Linux shell and Python. Your job is to plan goals, write bash commands, and improve yourself over time. Be precise, terse, and avoid unnecessary explanations."
+
+# Tweak model behavior for deterministic, clean output
+PARAMETER temperature 0.2
+PARAMETER repeat_penalty 1.1
+
+# Optional: enable compatibility with longer input tokens
+PARAMETER num_ctx 4096
