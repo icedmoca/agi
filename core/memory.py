@@ -8,7 +8,10 @@ from datetime import datetime
 
 from dataclasses import asdict
 from core.models import MemoryEntry
-from core.vector_memory import Vectorizer
+try:
+    from core.vector_memory import Vectorizer
+except Exception:
+    Vectorizer = None
 import numpy as np
 
 class Memory:
@@ -28,7 +31,7 @@ class Memory:
         file_path = kwargs.pop("filename", file_path)
         self.path = Path(file_path)
         self.max_entries = kwargs.pop("max_entries", 1_000)
-        self.vectorizer = Vectorizer()                     # already imported on line 11
+        self.vectorizer = Vectorizer() if Vectorizer else None
 
         # Remember the *latest* instance so helpers such as SelfHealer can
         # locate a Memory object even when one is not passed explicitly.
@@ -112,7 +115,7 @@ class Memory:
                 # ----- legacy files lack vector embeddings -------------
                 emb = entry.metadata.get("embedding")
 
-                if emb is None:                          # legacy rows
+                if emb is None and self.vectorizer is not None:
                     emb = self.vectorizer.embed(entry.goal)
                     if hasattr(emb, "tolist"):
                         emb = emb.tolist()
@@ -132,7 +135,18 @@ class Memory:
         """
         rows = [e.to_dict() if hasattr(e, "to_dict") else asdict(e)
                 for e in self.entries]
-        return self.vectorizer.find_similar(query, rows, top_k=top_k)
+        if self.vectorizer:
+            return self.vectorizer.find_similar(query, rows, top_k=top_k)
+        # simple fallback search
+        matches = []
+        query_terms = set(query.lower().split())
+        for entry in rows:
+            entry_terms = set(entry["goal"].lower().split())
+            score = len(query_terms & entry_terms)
+            if score:
+                matches.append((score, entry))
+        matches.sort(key=lambda x: x[0], reverse=True)
+        return [m[1] for m in matches[:top_k]]
 
     # ------------------------------------------------------------------ #
     # Serialisation helpers

@@ -23,3 +23,13 @@ Entry point scripts such as `main.py` and `agents/sentient_duo.py` create an `Ag
 
 ## Asynchronous Behaviour
 The main agent loop can run continuously (see `Agent.start` in `agent_loop.py`). Some tools such as chat streaming or watchers spawn background threads, but the core task processing is synchronous.
+
+## Available Tools
+The tool registry exposes several helper functions used by the planner:
+
+- `file_read(path)` – return the contents of a text file.
+- `internet_fetch(url)` – download raw text from a URL.
+- `os_metrics()` – gather basic CPU, memory and disk metrics.
+- `repo_scan(pattern="*")` – list repository files matching a glob.
+
+Additional utilities like `run_shell`, `evolve_file` and `web_search` are also registered and can be called by the agent.
