@@ -15,8 +15,16 @@ For a deeper dive into how the modules fit together, see `docs/ARCHITECTURE.md`.
 ## Installation
 
 1. Clone the repository.
-2. Ensure Python 3.10+ is installed and create a virtual environment.
-3. Install dependencies:
+2. Install the `python3-venv` package if it isn't already available:
+   ```bash
+   sudo apt install python3-venv -y
+   ```
+3. Create and activate a virtual environment:
+   ```bash
+   python3 -m venv agi_env
+   source agi_env/bin/activate
+   ```
+4. Install Python dependencies:
    ```bash
    pip install -r requirements.txt
    ```
