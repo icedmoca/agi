@@ -186,10 +186,29 @@ class DataFetcher:
     def web_search(self, query: str) -> dict:
         """Perform a web search query and return results"""
         try:
-            # Mock implementation for now
+            if requests is None:
+                return {"status": "error", "output": "requests library not available"}
+
+            # DuckDuckGo lite HTML endpoint (no JS required)
+            url = "https://duckduckgo.com/html/"
+            resp = requests.post(url, data={"q": query}, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+            resp.raise_for_status()
+
+            # VERY lightweight parsing – extract result titles & URLs via regex
+            import re, html
+            results = []
+            for m in re.finditer(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', resp.text):
+                href = html.unescape(m.group(1))
+                title = re.sub(r"<[^>]+>", "", m.group(2))
+                results.append(f"{title} – {href}")
+                if len(results) >= 5:
+                    break
+            if not results:
+                results.append("No results found or parsing failed")
+
             return {
                 "status": "success",
-                "output": f"Search results for: {query}"
+                "output": "\n".join(results)
             }
         except Exception as e:
             return {

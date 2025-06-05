@@ -23,7 +23,10 @@ from core.tools.tool_registry import (
     get_system_metrics,
     repo_scan,
     run_shell,
+    registry,
 )
+import pytest
+
 def test_file_read(tmp_path):
     f = tmp_path / "hello.txt"
     f.write_text("hello")
@@ -85,5 +88,32 @@ def test_run_shell():
 def test_get_system_metrics():
     res = get_system_metrics()
     assert isinstance(res, dict)
+
+
+def test_browse_page():
+    tool = registry.get_tool("browse_page")
+    assert tool is not None, "browse_page tool not registered"
+    result = tool(url="https://example.com")
+    assert isinstance(result, dict)
+    assert result.get("status") == "success"
+    assert "Example Domain" in result.get("output", "")
+
+
+def test_git_push_mock(monkeypatch):
+    """Mock subprocess to ensure git_push path returns success without real push."""
+    import subprocess
+
+    def fake_run(cmd, capture_output=False, text=False, check=False):
+        class R:
+            returncode = 0
+            stdout = "pushed"
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    tool = registry.get_tool("git_push")
+    assert tool is not None
+    result = tool()
+    assert result["status"] == "success"
 
 

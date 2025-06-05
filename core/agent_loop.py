@@ -80,6 +80,24 @@ class Agent:
         self._critical_total = 0      # keeps track of critical alerts
         self.failure_counts = defaultdict(int)
         
+        # ------------------------------------------------------------- #
+        # Modular sub-agents                                            #
+        # ------------------------------------------------------------- #
+        from core.agents.planner_agent import PlannerAgent
+        from core.agents.coder_agent import CoderAgent
+        from core.agents.healer_agent import HealerAgent
+
+        self.planner_agent = PlannerAgent()
+        self.coder_agent   = CoderAgent()
+        self.healer_agent  = HealerAgent()
+        
+        # ------------------------------------------------------------- #
+        # Runtime state / resilience                                   #
+        # ------------------------------------------------------------- #
+        self.state_file = Path("state.json")
+        self.consecutive_crashes = 0  # in-memory counter (persisted too)
+        self._load_state()
+        
     def setup_signal_handlers(self):
         """Setup clean shutdown on Ctrl+C"""
         signal.signal(signal.SIGINT, self.handle_shutdown)
@@ -849,6 +867,22 @@ class Agent:
     def run(self) -> None:
         """Main agent loop with task orchestration"""
         while self.running:
+            # --------------------------------------------------------- #
+            # Check external state flags (pause / stop)
+            # --------------------------------------------------------- #
+            try:
+                if self.state_file.exists():
+                    state = json.loads(self.state_file.read_text())
+                    st = state.get("status", "running")
+                    if st == "paused":
+                        time.sleep(5)
+                        continue
+                    if st in {"stopped", "halted"}:
+                        print("⏹️ Agent stopped via state flag")
+                        break
+            except Exception:
+                pass
+
             try:
                 # Fetch batch of pending tasks
                 pending_tasks = self.get_pending_tasks(limit=BATCH_SIZE)
@@ -873,8 +907,41 @@ class Agent:
                             logger.warning(f"Chain execution failed, moving to next chain")
                             
             except Exception as e:
-                logger.error(f"Error in main loop: {e}")
+                # Crash handling and audit logging
+                self.consecutive_crashes += 1
+                self._save_state()
+
+                err_msg = f"Main loop exception: {e}"
+                logger.error(err_msg)
+
+                # Audit log
+                Path("output").mkdir(exist_ok=True)
+                with open("output/audit.log", "a") as audit:
+                    audit.write(f"{datetime.now().isoformat()} ERROR {err_msg}\n")
+
+                # Memory entry
+                try:
+                    self.memory.append(
+                        goal="agent_loop crash",
+                        result=err_msg,
+                        score=-5,
+                        metadata={"type": "error", "source": "agent_loop"},
+                    )
+                except Exception:
+                    pass
+
+                if self.consecutive_crashes >= 3:
+                    logger.critical("Three consecutive crashes – halting agent for manual review")
+                    self._save_state(status="halted")
+                    break
+
                 time.sleep(SLEEP_INTERVAL)
+
+            else:
+                # successful iteration resets crash counter
+                if self.consecutive_crashes:
+                    self.consecutive_crashes = 0
+                    self._save_state()
 
     def execute_task_chain(self, chain: List[Dict[str, Any]]) -> str:
         """Execute a chain of dependent tasks"""
@@ -1364,6 +1431,33 @@ class Agent:
             self._enter_safe_mode()
 
     # ------------------------------------------------------------------ #
+    # State helpers                                                     #
+    # ------------------------------------------------------------------ #
+
+    def _load_state(self) -> None:
+        if self.state_file.exists():
+            try:
+                data = json.loads(self.state_file.read_text())
+                self.consecutive_crashes = data.get("crash_count", 0)
+                if data.get("status") == "paused":
+                    print("⏸️ Agent starts in *paused* state – resume via /resume or state.json")
+                if data.get("status") == "stopped":
+                    self.running = False
+            except Exception:
+                pass
+
+    def _save_state(self, status: str | None = None) -> None:
+        try:
+            data = {
+                "status": status or "running",
+                "crash_count": self.consecutive_crashes,
+                "updated": datetime.now().isoformat(),
+            }
+            self.state_file.write_text(json.dumps(data, indent=2))
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------ #
     # Task-execution entry-point                                         #
     # ------------------------------------------------------------------ #
     def process_task(self, task: Task) -> Task:
@@ -1404,11 +1498,15 @@ class Agent:
 
             # --- CODE-EVOLUTION --------------------------------------- #
             elif task.type == "evolve":
-                from core.tools.evolve_file import evolve_file
+                status, out = self.coder_agent.run(task)
+                task.result = out
+                task.status = status
 
-                outcome = evolve_file(task, self.memory)
-                task.result = outcome
-                task.status = "success" if "[SUCCESS]" in outcome else "error"
+            # --- SELF-HEAL ------------------------------------------- #
+            elif task.type == "self_heal":
+                status, out = self.healer_agent.handle_alert({"type": "generic", "severity": "warning"})
+                task.result = out
+                task.status = status
 
             # --- UNKNOWN TYPE ----------------------------------------- #
             else:
@@ -1439,13 +1537,8 @@ class Agent:
                 if self.task_counter >= 10:
                     self.task_counter = 0
                     try:
-                        from core.tools.tool_registry import reflect_self
-                        reflection = reflect_self()
-                        if reflection.get("status") == "success":
-                            new_goal = reflection["output"].splitlines()[-1]
-                            injected = self.create_task(new_goal)
-                            with open(TASKS_FILE, "a") as f:
-                                f.write(json.dumps(injected.to_dict()) + "\n")
+                        from core.reflection import reflect_self
+                        reflect_self()
                     except Exception as e:
                         logger.error(f"Scheduled reflection failed: {e}")
             except Exception:

@@ -14,6 +14,7 @@ except Exception:  # pragma: no cover - optional dependency
 import shlex
 import subprocess
 from core.intent_classifier import classify_intent
+from core.config import ALLOWED_TOOLS
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,10 @@ class ToolRegistry:
         import time
         from core.memory import Memory
         from core.reward import score_result
+
+        # Safety-gate: refuse execution of unlisted tools
+        if name not in ALLOWED_TOOLS:
+            return {"status": "error", "output": f"Tool '{name}' not allowed by policy"}
 
         tool_fn = self.tools[name]
         delay = 0.5
@@ -506,4 +511,133 @@ registry.register("agent_identity", agent_identity, {
 registry.register("build_memory_map", build_memory_map_tool, {
     "description": "Generate memory cluster map JSON",
     "parameters": {"type": "object", "properties": {}}
+})
+
+# ------------------------------------------------------------------ #
+# Helper: auto-load plugins from *core/tools/plugins*
+# ------------------------------------------------------------------ #
+
+def _autoload_plugins() -> None:
+    """Dynamically import *.py files from core/tools/plugins and register
+    any callables tagged with `is_tool = True` attribute.
+    """
+    from importlib import import_module, util
+    from pathlib import Path
+
+    plugins_dir = Path(__file__).parent / "plugins"
+    if not plugins_dir.exists():
+        return
+
+    for path in plugins_dir.glob("*.py"):
+        mod_name = f"core.tools.plugins.{path.stem}"
+        try:
+            spec = util.spec_from_file_location(mod_name, path)
+            if spec and spec.loader:
+                module = util.module_from_spec(spec)
+                spec.loader.exec_module(module)  # type: ignore
+            else:
+                continue
+
+            for attr_name in dir(module):
+                attr = getattr(module, attr_name)
+                if callable(attr) and getattr(attr, "is_tool", False):
+                    tool_name = getattr(attr, "tool_name", attr.__name__)
+                    registry.register(tool_name, attr, getattr(attr, "schema", None))
+        except Exception as e:
+            logger.error("Failed to autoload plugin %s: %s", path.name, e)
+
+
+# Trigger plugin discovery at import-time
+_autoload_plugins()
+
+# ------------------------------------------------------------------ #
+# Git push – new helper
+# ------------------------------------------------------------------ #
+
+@log_tool_call
+def git_push(remote: str = "origin", branch: str = "HEAD") -> str:
+    """Push committed changes to remote git repository."""
+    from core.utils import push_changes
+    return push_changes(remote, branch)
+
+# ------------------------------------------------------------------ #
+# Browse page – powered by new BrowserAgent
+# ------------------------------------------------------------------ #
+
+@log_tool_call
+def browse_page(url: str) -> dict:
+    """Fetch page and return plain-text content (best-effort)."""
+    from core.agents.browser_agent import BrowserAgent
+    agent = BrowserAgent()
+    return {"status": "success", "output": agent.browse_page(url)}
+
+registry.register("git_push", git_push, {
+    "description": "Push committed code to remote repository",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "remote": {"type": "string", "description": "Remote name", "default": "origin"},
+            "branch": {"type": "string", "description": "Branch/ref to push", "default": "HEAD"}
+        },
+        "required": []
+    }
+})
+
+registry.register("browse_page", browse_page, {
+    "description": "Retrieve and return the textual content of a web page",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "URL to fetch"}
+        },
+        "required": ["url"]
+    }
+})
+
+# ------------------------------------------------------------------ #
+# External goal submission helper
+# ------------------------------------------------------------------ #
+
+@log_tool_call
+def submit_external_goal(goal: str) -> dict:
+    """Append a user-provided goal into *pending_goals.jsonl*."""
+    from pathlib import Path
+    import json, datetime
+
+    try:
+        entry = {
+            "goal": goal,
+            "origin": "external",
+            "created": datetime.datetime.now().isoformat(),
+        }
+        path = Path("pending_goals.jsonl")
+        with path.open("a") as fp:
+            fp.write(json.dumps(entry) + "\n")
+        return {"status": "success", "output": "Goal submitted"}
+    except Exception as e:
+        return {"status": "error", "output": str(e)}
+
+registry.register("submit_external_goal", submit_external_goal, {
+    "description": "Submit an external goal to the agent queue",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "goal": {"type": "string", "description": "Goal text"}
+        },
+        "required": ["goal"]
+    }
+})
+
+# ------------------------------------------------------------------ #
+# Self identity tool
+# ------------------------------------------------------------------ #
+
+@log_tool_call
+def describe_self() -> str:
+    from core.identity import describe_self
+    return describe_self()
+
+registry.register("describe_self", describe_self, {
+    "description": "Return markdown description of the AGI itself",
+    "parameters": {"type": "object", "properties": {}},
 })

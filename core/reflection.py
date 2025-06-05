@@ -88,3 +88,67 @@ class ReflectionAgent:
                     summary.append(f"  • {event}")
                     
         return "\n".join(summary) 
+
+# --------------------------------------------------------------------------- #
+# New public helper for autonomous loop
+# --------------------------------------------------------------------------- #
+
+
+def reflect_self(memory_file: str = "memory.jsonl", pending: str = "pending_goals.jsonl") -> None:
+    """Scan *memory_file* for repeated failures / low scores and append new
+    meta-goals into *pending_goals.jsonl* when patterns are detected."""
+
+    from collections import Counter
+    from pathlib import Path
+
+    mem_path = Path(memory_file)
+    if not mem_path.exists():
+        return
+
+    entries = [json.loads(l) for l in mem_path.read_text().splitlines() if l.strip()]
+
+    # Gather tags and scores
+    fail_tags: Counter[str] = Counter()
+    recent_scores = []
+    unused_tools: Counter[str] = Counter()
+
+    for e in entries[-200:]:  # last 200 entries
+        score = e.get("score", 0)
+        recent_scores.append(score)
+        if score < 0:
+            for t in e.get("metadata", {}).get("tags", []):
+                fail_tags[t] += 1
+
+        if e.get("goal", "").startswith("tool:"):
+            tool_name = e["goal"].split(":", 1)[1]
+            unused_tools[tool_name] += 1
+
+    # simple heuristics
+    new_goals = []
+    for tag, cnt in fail_tags.items():
+        if cnt >= 3:
+            new_goals.append(f"Improve handling of tasks related to '{tag}' to reduce repeated failures")
+
+    if len(recent_scores) >= 20 and sum(1 for s in recent_scores[-20:] if s > 0) < 5:
+        new_goals.append("Investigate declining success rate and enhance retry logic")
+
+    # If tools unused recently suggest exploration
+    for tool, cnt in unused_tools.items():
+        if cnt < 2:
+            new_goals.append(f"Create tasks that utilise the '{tool}' tool to validate its utility")
+
+    if not new_goals:
+        return
+
+    pending_path = Path(pending)
+    pending_path.touch(exist_ok=True)
+    with pending_path.open("a") as fp:
+        for g in new_goals:
+            obj = {
+                "goal": g,
+                "origin": "reflection",
+                "created": datetime.now().isoformat(),
+            }
+            fp.write(json.dumps(obj) + "\n")
+    # also log
+    print(f"[Reflection] Injected {len(new_goals)} goal(s)") 

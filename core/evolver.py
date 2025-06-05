@@ -71,9 +71,99 @@ class Evolver:
             # Write evolved code
             Path(filepath).write_text(new_code)
             
+            # ------------------------------------------------------------------ #
+            # Post-validation: run unit-tests to ensure no regressions
+            # ------------------------------------------------------------------ #
+            tests_passed, test_output = run_pytest("tests")
+
+            # Compute diff size for scoring
+            diff_size = get_diff_size(current_code, new_code)
+
+            from core.reward import score_evolution as _score_evolution
+            evolution_score = _score_evolution(
+                goal,
+                test_output if tests_passed else "tests failed",
+                diff_size=diff_size,
+                tests_passed=tests_passed,
+            )
+
+            # Persist outcome to memory for future guidance
+            if memory is None:
+                mem = self.memory
+            else:
+                mem = memory
+            try:
+                mem.append(
+                    goal=goal,
+                    result=test_output,
+                    score=evolution_score,
+                    metadata={
+                        "type": "evolution_result",
+                        "file": filepath,
+                        "tests_passed": tests_passed,
+                        "diff_size": diff_size,
+                    },
+                )
+            except Exception:
+                pass
+
+            if not tests_passed:
+                logger.error("Evolution failed: test-suite regression")
+                return {
+                    "status": "failed",
+                    "output": f"Tests failed after evolution:\n{test_output[:500]}"
+                }
+
+            # ------------------------------------------------------------------ #
+            # Canary runtime validation – import the evolved module
+            # ------------------------------------------------------------------ #
+            mod_name = (
+                Path(filepath)
+                .with_suffix("")
+                .as_posix()
+                .replace("/", ".")
+                .lstrip(".")
+            )
+
+            try:
+                proc = subprocess.run(
+                    ["python", "- <<PY", f"import importlib; importlib.import_module('{mod_name}')\nPY"],
+                    capture_output=True,
+                    text=True,
+                    shell=True,
+                )
+                if proc.returncode != 0:
+                    raise RuntimeError(proc.stderr or proc.stdout)
+            except Exception as e:
+                # Revert the file to previous state using git
+                subprocess.run(["git", "checkout", "--", filepath], check=False)
+                logger.error("Canary import failed – reverted changes: %s", e)
+                self.memory.append(
+                    goal=goal,
+                    result=str(e),
+                    score=-5,
+                    metadata={"type": "canary_failure", "file": filepath},
+                )
+
+                # Log explicit reversion event for analytics
+                try:
+                    self.memory.append(
+                        goal=goal,
+                        result="Reverted file after canary failure",
+                        score=-1,
+                        metadata={"type": "reversion", "reason": "canary failed", "target": filepath},
+                    )
+                except Exception:
+                    pass
+
+                return {
+                    "status": "failed",
+                    "output": f"Canary validation failed: {e}"
+                }
+
             return {
                 "status": "completed",
-                "output": "Evolution successful"
+                "output": "Evolution successful – tests passed"
             }
             
         except Exception as e:
@@ -136,9 +226,13 @@ class Evolver:
                              current_code: str, memory_context: str,
                              all_files: List[str], temperature: float) -> Optional[str]:
         """Generate evolved code using LLM"""
-        system_prompt = """You are an expert Python developer.
-        Your task is to evolve Python code to meet specific goals while maintaining functionality.
-        Follow all output rules exactly."""
+        system_prompt = (
+            "You are an expert Python developer. "
+            "Your task is to evolve Python code to meet specific goals while maintaining functionality. "
+            "Ensure the resulting code has *no* syntax or logical errors, adheres to PEP8, "
+            "and passes the full test-suite (pytest in ./tests). "
+            "Follow all output rules exactly."
+        )
         
         user_prompt = f"""Evolve this file to achieve the goal:
 

@@ -83,4 +83,44 @@ def commit_changes(message: str) -> dict:
         return {
             "status": "error",
             "output": str(e)
+        }
+
+# ------------------------------------------------------------------ #
+# Git Push helper – keeps repo in sync with remote
+# ------------------------------------------------------------------ #
+
+def push_changes(remote: str = "origin", branch: str = "HEAD") -> dict:
+    """Push committed changes to the configured remote.
+
+    Args:
+        remote: Remote name (default "origin").
+        branch: Branch or refspec to push (default current HEAD).
+
+    Returns:
+        Dict with *status* and *output* keys similar to other utils.
+    """
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            ["git", "push", remote, branch],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        if result.returncode == 0:
+            return {
+                "status": "success",
+                "output": result.stdout.strip() or "Pushed successfully",
+            }
+        return {
+            "status": "error",
+            "output": result.stderr.strip() or "Git push failed",
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "output": str(e),
         } 
