@@ -11,6 +11,15 @@ from html.parser import HTMLParser
 import html
 
 logger = logging.getLogger(__name__)
+current_system_prompt = "You are a helpful AI assistant."
+
+def get_system_prompt() -> str:
+    return current_system_prompt
+
+def set_system_prompt(prompt: str) -> None:
+    global current_system_prompt
+    current_system_prompt = prompt
+
 
 class ChatConfig:
     """Configuration for chat functionality"""
@@ -219,8 +228,8 @@ def sanitize_llm_response(response: str, format: str = "plain") -> str:
         return "" if format != "json" else "{}"
 
 def chat_with_llm(
-    system_prompt: str, 
-    user_input: str, 
+    user_input: str,
+    system_prompt: str | None = None,
     format: str = "plain",
     model: str = "mistral-hacker",
     stream: bool = False,
@@ -238,7 +247,7 @@ def chat_with_llm(
         "plain": "\nRespond naturally without markdown or URLs unless specifically requested."
     }
     
-    full_prompt = system_prompt + format_instructions.get(format, "")
+    full_prompt = (system_prompt or get_system_prompt()) + format_instructions.get(format, "")
     
     try:
         if stream:
@@ -276,7 +285,7 @@ def _stream_chat(
         # Return final sanitized response
         final_response = "".join(response_chunks)
         cleaned = sanitize_llm_response(final_response, format)
-        _log_llm_history(system_prompt, user_input, cleaned, model)
+        _log_llm_history(system_prompt or get_system_prompt(), user_input, cleaned, model)
         return cleaned
         
     except ImportError:
@@ -316,7 +325,7 @@ def _single_chat(
         )
         result = sanitize_llm_response(response["message"]["content"], format)
 
-    _log_llm_history(system_prompt, user_input, result, model)
+    _log_llm_history(system_prompt or get_system_prompt(), user_input, result, model)
     
     return result
 
