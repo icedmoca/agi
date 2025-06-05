@@ -27,9 +27,23 @@ The main agent loop can run continuously (see `Agent.start` in `agent_loop.py`).
 ## Available Tools
 The tool registry exposes several helper functions used by the planner:
 
-- `file_read(path)` – return the contents of a text file.
-- `internet_fetch(url)` – download raw text from a URL.
-- `os_metrics()` – gather basic CPU, memory and disk metrics.
+- `read_file(path)` / `file_read(path)` – read the contents of a text file.
+- `fetch_url(url)` / `internet_fetch(url)` – download raw text from a URL.
+- `get_system_metrics()` / `os_metrics()` – gather basic CPU, memory and disk metrics.
 - `repo_scan(pattern="*")` – list repository files matching a glob.
+- `run_shell(command)` – execute a shell command safely.
+- `evolve_file(goal, file_path)` – evolve code using the LLM engine.
+- `open_browser(url)` – open a web page in the default browser.
+ - `git_commit(message)` – commit current repository changes.
+ - `web_search(query)` – perform a simple web search.
+- `reflect_self()` – summarise recent memory and propose improvements.
 
-Additional utilities like `run_shell`, `evolve_file` and `web_search` are also registered and can be called by the agent.
+Every tool call is traced to `output/tool_traces.jsonl` with arguments,
+output and a score. LLM prompts and responses are stored in `output/llm_history.jsonl`.
+Each result is stored in `Memory` with task metadata so that
+future plans can recall successful steps.
+
+Evolutions are applied via `safe_apply_evolution` which validates syntax,
+creates a timestamped backup and logs the diff to `evolution_log.md`.
+The background watchdog monitors memory for repeated failures and can
+enqueue reflective improvement tasks when thresholds are exceeded.

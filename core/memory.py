@@ -62,6 +62,12 @@ class Memory:
         score: int = 0,
         metadata: Dict[str, Any] | None = None,
     ) -> MemoryEntry:
+        if score == 0:
+            try:
+                from core.reward import score_result
+                score = score_result(result)
+            except Exception:
+                score = 0
         entry = MemoryEntry(goal=goal, result=result, score=score,
                             metadata=metadata or {})
 
@@ -73,6 +79,10 @@ class Memory:
             fh.write(json.dumps(data) + "\n")
 
         self.entries.append(entry)
+        try:
+            self.prune(threshold=-5)
+        except Exception:
+            pass
         return entry
 
     def get_recent(self, n: int = 5) -> List[MemoryEntry]:

@@ -647,6 +647,21 @@ class Agent:
         except Exception as e:
             logger.error(f"Failed to enter safe mode: {e}")
 
+    def _queue_auto_evolution(self, task: Task) -> None:
+        """Append an auto-generated evolution goal to tasks.jsonl"""
+        try:
+            goal = f"Improve handling of: {task.goal}"
+            entry = {
+                "id": f"auto_{int(datetime.now().timestamp())}",
+                "goal": goal,
+                "status": "pending",
+                "metadata": {"tags": ["auto", "evolution"], "created": datetime.now().isoformat()},
+            }
+            with open(TASKS_FILE, "a") as f:
+                f.write(json.dumps(entry) + "\n")
+        except Exception as e:
+            logger.error(f"Failed to queue auto evolution task: {e}")
+
     def _reflect_on_history(self, similar_entries: List[Dict]) -> str:
         """Generate reflection on past interactions"""
         if not similar_entries:
@@ -1341,6 +1356,8 @@ class Agent:
                         "status": task.status,
                     },
                 )
+                if task.status == "error":
+                    self._queue_auto_evolution(task)
             except Exception:
                 # Never allow memory failures to crash the agent
                 pass

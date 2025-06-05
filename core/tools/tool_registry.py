@@ -105,6 +105,7 @@ class ToolRegistry:
         """Execute a registered tool with retry and logging."""
         import time
         from core.memory import Memory
+        from core.reward import score_result
 
         tool_fn = self.tools[name]
         delay = 0.5
@@ -124,6 +125,7 @@ class ToolRegistry:
                 else:
                     return result
             finally:
+                score = score_result(str(result.get("output")))
                 trace = {
                     "timestamp": datetime.now().isoformat(),
                     "tool": name,
@@ -132,14 +134,24 @@ class ToolRegistry:
                     "attempt": attempt,
                     "duration": (datetime.now() - start).total_seconds(),
                     "output": result.get("output"),
+                    "score": score,
                 }
                 _log_tool_trace(trace)
                 mem = Memory.latest()
                 if mem:
+                    meta = {
+                        "type": "tool_use",
+                        "args": args,
+                        "status": status,
+                        "task_id": args.get("task_id"),
+                        "tags": args.get("tags"),
+                        "file_target": args.get("file_target") or args.get("file_path") or args.get("path"),
+                    }
                     mem.append(
                         goal=f"tool:{name}",
                         result=str(result.get("output")),
-                        metadata={"type": "tool_use", "args": args, "status": status},
+                        score=score,
+                        metadata=meta,
                     )
 
 # Initialize global registry
@@ -231,6 +243,21 @@ def internet_fetch(url: str) -> dict:
         return {"status": "error", "output": str(e)}
 
 @log_tool_call
+def fetch_url(url: str) -> dict:
+    """Alias for internet_fetch for compatibility"""
+    return internet_fetch(url)
+
+@log_tool_call
+def read_file(path: str) -> dict:
+    """Alias for file_read for compatibility"""
+    return file_read(path)
+
+@log_tool_call
+def get_system_metrics() -> dict:
+    """Alias for os_metrics"""
+    return os_metrics()
+
+@log_tool_call
 def os_metrics() -> dict:
     """Return basic OS telemetry"""
     from core.tools.fetcher import SystemFetcher
@@ -242,6 +269,27 @@ def repo_scan(pattern: str = "*") -> dict:
     from pathlib import Path
     matches = [str(p) for p in Path('.').rglob(pattern)]
     return {"status": "success", "output": "\n".join(matches)}
+
+@log_tool_call
+def reflect_self() -> dict:
+    """Summarise recent memory and suggest improvements"""
+    from core.memory import Memory
+    mem = Memory.latest()
+    if not mem:
+        return {"status": "error", "output": "memory unavailable"}
+    recent = mem.get_recent(10)
+    successes = [e for e in recent if e.score > 0][-5:]
+    failures = [e for e in recent if e.score <= 0][-5:]
+    summary_lines = ["Architecture modules: " + ", ".join(sorted(p.stem for p in Path('core').glob('*.py')))]
+    if successes:
+        summary_lines.append("Last successes:" )
+        summary_lines.extend(f"- {e.goal} ({e.score})" for e in successes)
+    if failures:
+        summary_lines.append("Recent failures:" )
+        summary_lines.extend(f"- {e.goal} ({e.score})" for e in failures)
+    suggestion = "Improve error handling" if failures else "Continue current plan"
+    summary_lines.append(f"Next evolution suggestion: {suggestion}")
+    return {"status": "success", "output": "\n".join(summary_lines)}
 
 # Register tools with schemas
 registry.register("evolve_file", evolve_file, {
@@ -335,6 +383,29 @@ registry.register("internet_fetch", internet_fetch, {
     }
 })
 
+registry.register("fetch_url", fetch_url, {
+    "description": "Fetch content from a URL",
+    "parameters": {
+        "type": "object",
+        "properties": {"url": {"type": "string", "description": "URL"}},
+        "required": ["url"]
+    }
+})
+
+registry.register("read_file", read_file, {
+    "description": "Read a text file",
+    "parameters": {
+        "type": "object",
+        "properties": {"path": {"type": "string", "description": "File path"}},
+        "required": ["path"]
+    }
+})
+
+registry.register("get_system_metrics", get_system_metrics, {
+    "description": "Retrieve basic OS metrics",
+    "parameters": {"type": "object", "properties": {}}
+})
+
 registry.register("os_metrics", os_metrics, {
     "description": "Retrieve basic OS metrics",
     "parameters": {"type": "object", "properties": {}}
@@ -348,4 +419,9 @@ registry.register("repo_scan", repo_scan, {
             "pattern": {"type": "string", "description": "Glob pattern"}
         }
     }
+})
+
+registry.register("reflect_self", reflect_self, {
+    "description": "Summarise recent memory and suggest self-improvements",
+    "parameters": {"type": "object", "properties": {}}
 })
